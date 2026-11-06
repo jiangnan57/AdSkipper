@@ -69,7 +69,7 @@ fi
 # 950 必须排在 99 之后判定之外单独处理：旧脚本用 "$V -ge 99" 判负向，
 # 会把弹窗样本也当成「不许点」的负向样本，弹窗链路从来没进过回归。
 # 快速冒烟：TEST_VARIANTS="1 2" ./test_variants.sh <序列号>
-VARIANTS="${TEST_VARIANTS:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 99 901 902 903 950}"
+VARIANTS="${TEST_VARIANTS:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 99 901 902 903 904 950}"
 PASS=0; FAIL=0
 for V in $VARIANTS; do
   # 息屏 / 锁屏时 rootInActiveWindow 可能拿不到目标窗口，尤其刚重绑完

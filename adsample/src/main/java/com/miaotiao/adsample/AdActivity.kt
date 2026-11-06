@@ -90,6 +90,7 @@ class AdActivity : AppCompatActivity() {
             901 -> setupNovelPage(root, w, h)
             902 -> setupCommentSheet(root, w, h)
             903 -> setupChatPage(root, w, h)
+            904 -> setupChatMessagePage(root, w, h)
         }
 
         setContentView(root)
@@ -604,6 +605,66 @@ class AdActivity : AppCompatActivity() {
             FrameLayout.LayoutParams(w - dp(40), dp(72)).apply {
                 gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
                 bottomMargin = dp(40)
+            }
+        )
+    }
+
+    /**
+     * 负向样本 904：QQ「QQ邮箱提醒」那种聊天页。
+     *
+     * 真实事故：一条 GitHub Actions 通知的正文是
+     * `[jiangnan57/AdSkipper] Run failed: Build APK`，规则里的关键字 `Skip`
+     * 直接子串匹配上了 `AdSkip` 里的 `Skip`，秒跳于是把这条**聊天消息卡片**
+     * 当成跳过按钮点了下去——用户打开 QQ 就"莫名其妙进了 QQ 邮箱，还退不出来"。
+     *
+     * 这条样本要求：长文案里即便含 skip / Skip 字样，也绝不许点。
+     */
+    private fun setupChatMessagePage(root: FrameLayout, w: Int, h: Int) {
+        val bg = root.getChildAt(0) as FrameLayout
+        bg.setOnClickListener(null)
+        bg.isClickable = false
+        bg.setBackgroundColor(Color.parseColor("#121216"))
+
+        root.addView(
+            TextView(this).apply {
+                text = "QQ 邮箱提醒"
+                setTextColor(Color.WHITE)
+                textSize = 17f
+                gravity = Gravity.CENTER
+            },
+            FrameLayout.LayoutParams(w, dp(48)).apply {
+                gravity = Gravity.TOP
+                topMargin = dp(30)
+            }
+        )
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#1E1E24"))
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            isClickable = true
+            setOnClickListener { wrongClicked("邮件消息卡片") }
+        }
+        card.addView(
+            TextView(this).apply {
+                text = "jiangnan57: [jiangnan57/AdSkipper] Run failed: Build APK · all jobs failed"
+                setTextColor(Color.parseColor("#BBBBBB"))
+                textSize = 13f
+            }
+        )
+        card.addView(
+            TextView(this).apply {
+                text = "邮件详情  ›"
+                setTextColor(Color.parseColor("#7A7A80"))
+                textSize = 13f
+                setPadding(0, dp(10), 0, 0)
+            }
+        )
+        root.addView(
+            card,
+            FrameLayout.LayoutParams(w - dp(32), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.TOP
+                topMargin = dp(110)
             }
         )
     }

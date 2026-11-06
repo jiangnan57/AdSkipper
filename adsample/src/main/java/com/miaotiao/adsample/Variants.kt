@@ -41,7 +41,8 @@ object Variants {
         //      但一个都不许点。对应实测中被误伤的真实场景。
         V(901, "番茄小说式首页：右上角「分类」+底部导航+点赞", false),
         V(902, "抖音式评论区半屏弹层：中部「关闭 ×」", false),
-        V(903, "DeepSeek 式欢迎页：右上角「新对话」", false)
+        V(903, "DeepSeek 式欢迎页：右上角「新对话」", false),
+        V(904, "QQ 聊天页：长消息含「AdSkipper」被 Skip 子串误命中", false)
     )
 
     fun byId(id: Int): V = ALL.firstOrNull { it.id == id } ?: ALL.first()

@@ -13,9 +13,15 @@ package com.miaotiao.adskip.engine
  */
 object SafeWords {
 
-    /** 广告专属语义，命中即放行 */
+    /**
+     * 广告专属语义，命中即放行。
+     *
+     * 英文词必须带词边界：否则一条正文写着 `[jiangnan57/AdSkipper] Run failed`
+     * 的聊天消息会因为含 `Skip` 被当成「广告关闭键」，一路放行到点击。
+     */
     private val AD_TOKEN = Regex(
-        "(跳过|关闭广告|关闭开屏|关闭弹窗|跳过广告|skip|dismiss|sponsor)",
+        "(跳过|关闭广告|关闭开屏|关闭弹窗|跳过广告|" +
+            "(?<![A-Za-z])skip(?![A-Za-z])|(?<![A-Za-z])dismiss(?![A-Za-z])|sponsor)",
         RegexOption.IGNORE_CASE
     )
 

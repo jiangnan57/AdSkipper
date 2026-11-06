@@ -1,7 +1,7 @@
 # 秒跳 · AdSkipper
 
 > 一个基于 Android 无障碍服务的开屏广告跳过工具，纯本地规则匹配，不上传任何屏幕内容。
-> 当前版本 **v1.3.2**（versionCode 8） · minSdk 26 / targetSdk 34 · Kotlin + XML 布局
+> 当前版本 **v1.3.3**（versionCode 9） · minSdk 26 / targetSdk 34 · Kotlin + XML 布局
 
 ---
 
@@ -86,14 +86,14 @@ ADSKIP_STORE_PASS=xxx ADSKIP_KEY_PASS=xxx ./gradlew assembleRelease
 
 ## 测试
 
-`adsample/` 是一个人造广告测试台，包含 **20 种样本**：多种开屏广告形态、内容页负向样本（验证不误点）、以及运营弹窗样本。
+`adsample/` 是一个人造广告测试台，包含 **21 种样本**：多种开屏广告形态、内容页负向样本（验证不误点）、以及运营弹窗样本。
 
 ```bash
 bash test_variants.sh <adb 设备序列号>    # 广告形态：20/20
 bash test_guard.sh   <adb 设备序列号>    # 防误跳四场景：4/4
 ```
 
-回归需要 USB 调试、测试期间**独占前台**（不要同时打开其他 App），并且每次重装后重新绑定无障碍。当前 v1.3.2 在 Redmi K40（Android 11）上为 **20/20 + 4/4 通过**。
+回归需要 USB 调试、测试期间**独占前台**（不要同时打开其他 App），并且每次重装后重新绑定无障碍。当前 v1.3.3 在 Redmi 24122RKC7C（HyperOS / Android 16）上广告形态 **21/21**，防误跳四场景在 Redmi K40（Android 11）上 **4/4**。
 
 `test_guard.sh` 验证的是「该拦的拦住、不该拦的放过」：广告跳淘宝 / 跳商店要能自动退出，而用户自己点进淘宝、或在内容页正常使用后跳转时绝不能乱返回。
 

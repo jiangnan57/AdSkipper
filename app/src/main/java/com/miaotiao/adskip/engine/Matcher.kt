@@ -28,7 +28,36 @@ object Matcher {
             '+' -> s.startsWith(text)
             '-' -> s.endsWith(text)
             '=' -> s.contentEquals(text)
-            else -> s.contains(text) || looseContains(s, text)
+            else -> (if (ASCII_WORD.matches(text)) containsWord(s, text) else s.contains(text)) ||
+                looseContains(s, text)
+        }
+    }
+
+    /**
+     * 纯英文关键词。这类词必须按「词边界」匹配，不能直接 contains。
+     *
+     * 真实事故：QQ 里「QQ邮箱提醒」的一条 GitHub Actions 通知，正文写着
+     * `[jiangnan57/AdSkipper] Run failed`，规则里的关键字 `Skip` 直接 contains
+     * 命中了 `AdSkip` 里的 `Skip` → 秒跳把这条**聊天消息**当成跳过按钮点了下去，
+     * 于是用户打开 QQ 就跳进邮件详情 / QQ 邮箱，还回不来。
+     *
+     * 中文关键词不存在这个问题（「跳过」不会嵌在别的词里），所以只对纯英文加边界。
+     */
+    private val ASCII_WORD = Regex("""^[A-Za-z][A-Za-z ]*$""")
+
+    /** 按词边界找 t：前后都不能紧贴字母/数字 */
+    private fun containsWord(s: CharSequence, t: String): Boolean {
+        if (s.length < t.length) return false
+        var from = 0
+        while (true) {
+            val i = s.indexOf(t, from)
+            if (i < 0) return false
+            val before = if (i == 0) null else s[i - 1]
+            val after = if (i + t.length >= s.length) null else s[i + t.length]
+            val okBefore = before == null || !before.isLetterOrDigit()
+            val okAfter = after == null || !after.isLetterOrDigit()
+            if (okBefore && okAfter) return true
+            from = i + 1
         }
     }
 

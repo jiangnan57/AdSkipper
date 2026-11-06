@@ -309,17 +309,26 @@ object SplashScanner {
         for (n in tree) {
             val hit = Matcher.firstHit(kw, n) ?: continue
             if (splash.ex.isNotEmpty() && Matcher.hitAny(splash.ex, n)) continue
+            val vid = n.viewIdResourceName
+            val label = Access.label(n)
+            // 跳过关闭键的文案一定很短：「跳过 5」「Skip Ad」「关闭广告」。
+            // 长文案必然是正文 / 聊天消息 / 标题，哪怕里面含 Skip 也不能点。
+            // 这是 QQ 误点的直接原因：一条 `[jiangnan57/AdSkipper] Run failed`
+            // 的 GitHub 通知被当成跳过按钮点了下去。
+            // 按控件 id 命中的不受此限（id 本身就是广告专用的）。
+            val onId = vid != null && hit.hit(vid)
+            if (!onId && label.length > 20) continue
             n.getBoundsInScreen(r)
             val area = r.width().toLong() * r.height()
             if (area <= 0L || area > maxRuleArea) continue
             // 系统文本检索是「包含」匹配，容易把「关闭评论」「分类」带出来，
             // 这里做一次同样的通用词拦截
-            if (SafeWords.isUnsafe(Access.label(n))) continue
+            if (SafeWords.isUnsafe(label)) continue
             out.add(
                 Candidate(
                     n,
-                    ruleScore(r, area, screenArea, screenW, screenH, n, hit, n.viewIdResourceName),
-                    true, hit.raw, Access.label(n),
+                    ruleScore(r, area, screenArea, screenW, screenH, n, hit, vid),
+                    true, hit.raw, label,
                     // 必须拷贝：r 是循环外复用的临时对象，直接传引用会让所有
                     // 候选共享同一个 Rect（值等于最后一个节点的边界）。
                     // 后果是 rank 的 distinctBy 把所有候选判成同一个位置、
