@@ -422,6 +422,66 @@ class SkipAccessibilityService : AccessibilityService() {
         main.post { maybeShowGhost() }
     }
 
+    /**
+     * 把用户从广告落地页弹回原 App。三级兜底，逐级加重：
+     *
+     *   第 1 级（400ms）：按一次返回。大多数 App 有效。
+     *   第 2 级（1.6s）：还在落地页上，就直接把原 App 拉回前台。
+     *       电商/商店的「欢迎页」普遍会吃掉返回键——实测淘宝 WelcomeActivity
+     *       连按两次 BACK 都返回 true 但页面纹丝不动。这时只能重新拉起原 App。
+     *   第 3 级（2.8s）：拉不起来（后台启动 Activity 被 ROM 限制）就按 HOME，
+     *       至少把用户从广告页带走，他再点一下原 App 就能回来。
+     *
+     * 每一级都先确认「前台还是那个落地页」才动手，不会误伤用户自己的页面。
+     */
+    fun backOffLanding(landingPkg: String, originPkg: String?) {
+        main.postDelayed({
+            val ok = runCatching { performGlobalAction(GLOBAL_ACTION_BACK) }.getOrDefault(false)
+            Log.i(TAG, "guard back#1 pkg=$landingPkg ok=$ok")
+        }, 400L)
+
+        main.postDelayed({
+            val h = scanHandler ?: return@postDelayed
+            // 读窗口必须在 scanHandler 上做，主线程读会死锁（见 poller 注释）
+            h.post {
+                val cur = runCatching { activePackage() }.getOrNull()
+                if (cur != landingPkg) return@post
+                main.post { guardRelaunch(landingPkg, originPkg) }
+            }
+        }, 1_600L)
+    }
+
+    /** 第 2 级：把原 App 拉回前台；1.2 秒后仍是落地页就走第 3 级 */
+    private fun guardRelaunch(landingPkg: String, originPkg: String?) {
+        val ok = originPkg != null && relaunch(originPkg)
+        Log.i(TAG, "guard relaunch origin=$originPkg ok=$ok")
+        main.postDelayed({
+            val h = scanHandler ?: return@postDelayed
+            h.post {
+                val still = runCatching { activePackage() }.getOrNull()
+                if (still != landingPkg) return@post
+                main.post {
+                    val home = runCatching { performGlobalAction(GLOBAL_ACTION_HOME) }
+                        .getOrDefault(false)
+                    Log.i(TAG, "guard home fallback pkg=$landingPkg ok=$home")
+                    SkipLog.add("已从 ${landingPkg.substringAfterLast('.')} 退出（该页会吞返回键）")
+                }
+            }
+        }, 1_200L)
+    }
+
+    /**
+     * 用桌面启动意图把某个 App 带回前台。
+     *
+     * Android 10+ 对「后台启动 Activity」有全局限制，无障碍服务属于有豁免的
+     * 少数场景之一；即使被限制，也只会静默失败，下一级会兜住。
+     */
+    private fun relaunch(pkg: String): Boolean {
+        val i = runCatching { packageManager.getLaunchIntentForPackage(pkg) }.getOrNull() ?: return false
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        return runCatching { startActivity(i); true }.getOrDefault(false)
+    }
+
     private fun hideGhostWindow() {
         ghost?.let { v ->
             runCatching {
@@ -894,6 +954,10 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val hit = result.best
+        // 扫到的是「正常内容页」（有列表 / 频道栏 / 文字密集 / 可点元素多），
+        // 说明这个 App 的开屏阶段已经过去。之后它再跳电商/商店，是用户自己点的，
+        // 不该按返回。判定逻辑见 JumpGuard.noteContentPage。
+        if (hit == null && result.contentPage) JumpGuard.noteContentPage(pkg)
         if (hit != null) {
             val key = "splash:$pkg"
             // 同一轮里点掉之后要给足冷却：很多内容页上也有「跳过」类文字，

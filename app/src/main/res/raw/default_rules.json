@@ -211,8 +211,10 @@
       "name": "QQ",
       "splash": {
         "keywords_append": [
-          "跳过"
-        ]
+          "跳过",
+          "skip"
+        ],
+        "delay": 200
       }
     },
     "com.tencent.qqlive": {
@@ -268,6 +270,17 @@
           ]
         }
       ]
+    },
+    "com.suda.yzune.wakeupschedule": {
+      "name": "WakeUp课程表",
+      "_note": "开屏是穿山甲摇一摇广告：跳过按钮是 id_skip_button，另有全屏跳转按钮",
+      "splash": {
+        "keywords_append": [
+          "跳过",
+          "skip_button"
+        ],
+        "delay": 200
+      }
     }
   }
 }

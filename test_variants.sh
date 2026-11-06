@@ -4,7 +4,7 @@
 #   ./test_variants.sh              自动挑一台装了测试台的设备
 #   ./test_variants.sh 8d9095d3     指定设备序列号
 #
-# 1~14  ：正向样本，必须被跳过，且不能点到广告创意本身
+# 1~15  ：正向样本，必须被跳过，且不能点到广告创意本身
 # 99    ：正常内容页，不许点
 # 950   ：弹窗样本，必须由「弹窗规则」关掉，且不能被开屏识别抢先点
 # 901+  ：负向样本（番茄式首页 / 抖音式评论区 / DeepSeek 式欢迎页），不许点、不许返回
@@ -69,7 +69,7 @@ fi
 # 950 必须排在 99 之后判定之外单独处理：旧脚本用 "$V -ge 99" 判负向，
 # 会把弹窗样本也当成「不许点」的负向样本，弹窗链路从来没进过回归。
 # 快速冒烟：TEST_VARIANTS="1 2" ./test_variants.sh <序列号>
-VARIANTS="${TEST_VARIANTS:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 99 901 902 903 950}"
+VARIANTS="${TEST_VARIANTS:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 99 901 902 903 950}"
 PASS=0; FAIL=0
 for V in $VARIANTS; do
   # 息屏 / 锁屏时 rootInActiveWindow 可能拿不到目标窗口，尤其刚重绑完
@@ -109,7 +109,14 @@ for V in $VARIANTS; do
     fi
   else
     if [ "$CLICKED" -gt 0 ]; then
-      if [ "$ADCLICK" -gt 0 ]; then RES="⚠️ 跳过但误点广告"; PASS=$((PASS+1)); else RES="✅ 跳过"; PASS=$((PASS+1)); fi
+      # 点到了广告本体（adClicked）绝不能算通过：那正是「跳过变成跳转」的形态，
+      # 用户看到的是「跳过了」实际却被送进广告落地页。以前这里判 ⚠️ 还计 PASS，
+      # 等于把最严重的缺陷藏起来了。
+      if [ "$ADCLICK" -gt 0 ]; then
+        RES="❌ 点了广告本体(跳过=${CLICKED})"; FAIL=$((FAIL+1))
+      else
+        RES="✅ 跳过"; PASS=$((PASS+1))
+      fi
     else
       RES="❌ 未跳过"; FAIL=$((FAIL+1))
     fi

@@ -98,4 +98,47 @@ object AppLists {
         "com.netease.cloudmusic",
         "com.gotokeep.keep"
     )
+
+    /**
+     * 「广告落地页」：开屏广告被点中/被摇一摇触发后，最后落到的那些 App。
+     *
+     * 判据和商店不同。商店可以「任何来源、2 秒内」无条件返回，因为正常人不会
+     * 在 App 刚起来的 2 秒里主动去应用商店；但电商/内容 App 用户是会自己点的
+     * （详情页里的商品卡、推广位），所以这类只在
+     * 「来源 App 是刚从桌面打开、还没怎么用」时才按返回——那正是摇一摇广告
+     * 和误触落地的唯一形态。见 JumpGuard 里的 originCold。
+     *
+     * 加这一组的直接原因：WakeUp 课程表的开屏是穿山甲「摇一摇」广告，
+     * 摇一下直接拉起电商/商店，无障碍服务看不到传感器事件，只能落地后补救。
+     */
+    val AD_LANDING = setOf(
+        "com.taobao.taobao",
+        "com.tmall.wireless",
+        "com.jingdong.app.mall",
+        "com.jingdong.pdj",
+        "com.xunmeng.pinduoduo",
+        "com.achievo.vipshop",
+        "com.suning.mobile.ebuy",
+        "com.sankuai.meituan",
+        "me.ele",
+        "com.taobao.idlefish",
+        "com.kaola",
+        "com.alibaba.aliexpresshd",
+        "com.taobao.litetao",
+        "com.jd.jdlite",
+        "com.eg.android.AlipayGphone",
+        "com.xingin.xhs",
+        "com.ss.android.ugc.aweme",
+        "com.smile.gifmaker",
+        "com.kuaishou.nebula",
+        "com.phoenix.read",
+        "com.dragon.read",
+        "com.miui.video",
+        "com.qiyi.video",
+        "com.tencent.qqlive",
+        "com.youku.phone"
+    )
+
+    fun isAdLanding(pkg: String): Boolean =
+        pkg in AD_LANDING || AD_LANDING.any { pkg.startsWith("$it.") }
 }

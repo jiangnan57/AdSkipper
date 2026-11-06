@@ -4,12 +4,31 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 
 /** 节点树遍历、系统检索、点击与节点生命周期管理。 */
 object Access {
 
     const val MAX_NODES = 700
+
+    /**
+     * 一次遍历的时间预算。
+     *
+     * 节点数上限挡不住「节点少但每个都很慢」的情况：界面切换那一瞬间，
+     * 单次 childCount / getChild 的跨进程 IPC 可能挂起几百毫秒甚至几秒。
+     * 实测淘宝首页切换时一趟 182 个节点的遍历跑了 5099ms，把
+     * adskip-scan 这个 HandlerThread 整条占死——新 App 的开屏监测
+     * 头 5 秒一次都扫不了，等于全盲（test_guard.sh 场景 D 就栽在这里）。
+     *
+     * 所以除了节点数上限，再加一道时间闸：超时就带着已经拿到的节点返回，
+     * 本轮按「没命中」处理，下一次轮询马上重来。少扫几十个节点，
+     * 远好过整条扫描链停工五秒。
+     */
+    private const val WALK_BUDGET_MS = 900L
+
+    /** 每访问这么多个节点看一次时钟，避免频繁调用 */
+    private const val BUDGET_CHECK_MASK = 0x3F
 
     /**
      * AccessibilityNodeInfo 持有跨进程资源。API 33 起 recycle 虽被标记废弃，
@@ -26,12 +45,20 @@ object Access {
     }
 
     /** 广度优先遍历。调用方用完后必须 recycleAll 返回列表。 */
-    fun walk(root: AccessibilityNodeInfo?, limit: Int = MAX_NODES): List<AccessibilityNodeInfo> {
+    fun walk(
+        root: AccessibilityNodeInfo?,
+        limit: Int = MAX_NODES,
+        budgetMs: Long = WALK_BUDGET_MS
+    ): List<AccessibilityNodeInfo> {
         if (root == null) return emptyList()
+        val t0 = SystemClock.uptimeMillis()
         val out = ArrayList<AccessibilityNodeInfo>(96)
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.addLast(root)
         while (queue.isNotEmpty() && out.size < limit) {
+            if ((out.size and BUDGET_CHECK_MASK) == 0 &&
+                SystemClock.uptimeMillis() - t0 > budgetMs
+            ) break
             val n = queue.removeFirst()
             out.add(n)
             // 界面正在切换时整棵树可能瞬间失效：childCount / getChild 会抛
@@ -50,9 +77,21 @@ object Access {
     /**
      * 点击自身或最近的可点击祖先；中间 parent 节点全部释放。
      *
-     * 关键细节：不能盲目用可点击祖先的位置来点。开屏广告常常是
-     * 「一个铺满全屏的可点击容器 + 里面一个不可点击的『跳过』文字」，
-     * 点容器的中心就点到广告图上了。所以祖先区域过大时宁可点节点自己。
+     * 这里有两个必须守住的边界，都是被真实广告教育出来的：
+     *
+     * 1. 不能盲目用「可点击祖先」的位置来点。
+     *    开屏广告几乎是「一个铺满全屏的可点击容器（onClick = 跳广告落地页）
+     *    + 里面一个不可点击的『跳过』文字」。点容器中心就是点广告图。
+     *
+     * 2. 更不能对「可点击祖先」直接 performAction(CLICK)。
+     *    这一条比第 1 条更隐蔽：旧代码先看 cur.isClickable，是就 performAction，
+     *    只用 tooBig 限制坐标兜底——于是遇到「跳过」自身不可点、祖先正好是
+     *    全屏广告容器时，performAction 会**在容器上**执行，等于点了广告本体，
+     *    容器 onClick 直接把用户送进广告落地页（QQ 跳 QQ 邮箱、WakeUp 跳应用商店
+     *    都是这个形态），而日志还老老实实打「skipped 成功」，完全看不出问题。
+     *
+     *    现在规定：祖先覆盖超过整屏 25% 就视为「广告本体」，既不许 performAction，
+     *    也不许用它的位置，只点节点自己的中心。
      *
      * recyclePath=false 时不释放沿途的祖先节点，交给调用方统一管理。
      * 弹窗扫描把整棵树一次性取出来复用，祖先节点也在树里，
@@ -70,6 +109,7 @@ object Access {
         var tapRect: Rect? = null
 
         val ownRect = bounds(node)
+        val ownArea = ownRect.width().toLong() * ownRect.height()
         // 自己有可点区域就直接用它，比祖先可靠
         if (ownRect.width() > 0 && ownRect.height() > 0) tapRect = ownRect
 
@@ -81,23 +121,34 @@ object Access {
             return tapAt(service, ownRect.exactCenterX(), ownRect.exactCenterY())
         }
 
+        // 祖先面积的「广告本体」阈值。screenArea 未知（0）时退化成「不能比节点
+        // 大 8 倍以上」，仍然能挡住全屏容器，又不会因为没传参数就完全失效。
+        val tooBigThreshold: Long =
+            if (screenArea > 0L) (screenArea * 0.25f).toLong() else Long.MAX_VALUE
+
         while (current != null && depth < 8) {
             val cur = current
             val isInput = cur === node
             if (cur.isClickable && cur.isEnabled) {
-                if (runCatching {
-                    cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                }.getOrDefault(false)) {
+                val r = bounds(cur)
+                val curArea = r.width().toLong() * r.height()
+                val tooBig = if (screenArea > 0L) {
+                    curArea > tooBigThreshold
+                } else {
+                    ownArea > 0L && curArea > ownArea * 8L
+                }
+                if (tooBig && !isInput) {
+                    // 广告本体：跳过它，继续向上找（可能上面还有个真正的小按钮），
+                    // 找不到就用节点自身坐标兜底，绝不在它身上 performAction。
+                } else if (runCatching {
+                        cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    }.getOrDefault(false)
+                ) {
                     if (!isInput && recyclePath) recycle(cur)
                     return true
-                }
-                // 祖先可点但 performAction 失败：只在它不比节点大太多时才用它的位置
-                val r = bounds(cur)
-                val ownArea = ownRect.width().toLong() * ownRect.height()
-                val curArea = r.width().toLong() * r.height()
-                val tooBig = screenArea > 0L && curArea > screenArea * 0.25f
-                if (tapRect == null || (!tooBig && curArea <= ownArea * 6L)) {
-                    if (!tooBig) tapRect = r
+                } else if (!tooBig && (tapRect == null || curArea <= ownArea * 6L)) {
+                    // 祖先可点但 performAction 失败：只在它不比节点大太多时才用它的位置
+                    tapRect = r
                 }
             }
 

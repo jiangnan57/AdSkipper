@@ -84,6 +84,7 @@ class AdActivity : AppCompatActivity() {
             12 -> addSkipAtHeight(root, w, h, "跳过", 0.78f)
             13 -> addSkipInWrapper(root, w, h)
             14 -> addCornerSkip(root, w, h, "跳 过", topMarginDp = 28, rightMarginDp = 16)
+            15 -> addSkipTouchOnlyInAdContainer(ad, w, h)
             99 -> setupContentControl(root, w, h)
             950 -> setupPopupOverlay(root, w, h)
             901 -> setupNovelPage(root, w, h)
@@ -289,6 +290,41 @@ class AdActivity : AppCompatActivity() {
         lp.topMargin = dp(28)
         lp.rightMargin = dp(16)
         root.addView(wrapper, lp)
+    }
+
+    /**
+     * 真实穿山甲 / 腾讯系开屏广告的形态（QQ、WakeUp 课程表都是这一类）。
+     *
+     * 关键特征三条，缺一不可：
+     *   1. 跳过按钮**节点自身不可点击**（`isClickable = false`）——广告 SDK 在
+     *      自己的 View 里重写触摸事件，无障碍拿到的节点就是不可点的；
+     *   2. 树里**唯一**的可点击祖先是那个全屏广告容器；
+     *   3. 容器的 onClick 就是「跳广告落地页」。
+     *
+     * 于是 `performAction(CLICK)` 在容器上执行时，用户看到的就是
+     * 「跳过成功」但页面跳走了——正是 QQ 跳 QQ 邮箱的那个现象。
+     *
+     * 正确的做法只能是在跳过按钮自己的坐标上补一次点击：
+     * 触摸落到按钮上，SDK 的触摸处理接住，广告容器不会收到。
+     */
+    private fun addSkipTouchOnlyInAdContainer(ad: FrameLayout, w: Int, h: Int) {
+        skipLabel = styledSkip("跳过 5s")
+        // 1) 节点不可点击：ACCESSIBILITY 的 ACTION_CLICK 对它无效
+        skipLabel.isClickable = false
+        // 2) 用触摸事件处理点击，模拟广告 SDK 的做法
+        skipLabel.setOnTouchListener { _, e ->
+            if (e.action == android.view.MotionEvent.ACTION_UP) onSkipClicked()
+            true
+        }
+        val lp = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        lp.gravity = Gravity.TOP or Gravity.END
+        lp.topMargin = dp(28)
+        lp.rightMargin = dp(16)
+        // 3) 直接挂在全屏可点击广告容器里，中间没有小容器
+        ad.addView(skipLabel, lp)
     }
 
     /** 对照组：正常内容页，带可滚列表与大量可点击项，不该被点 */
