@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">秒跳</string>
+    <string name="title_rules">规则管理</string>
+
+    <string name="accessibility_summary">自动点击开屏广告上的跳过按钮</string>
+    <string name="accessibility_desc">秒跳通过无障碍服务读取当前屏幕上的界面元素，自动点击开屏广告的「跳过 / 关闭」按钮；在检测到应用被「摇一摇」类广告跳转到应用商店或浏览器时，自动返回上一页。本应用不联网、不上传任何数据。</string>
+
+    <string name="status_on">服务运行中</string>
+    <string name="status_off">服务未开启</string>
+    <string name="btn_grant">去开启无障碍</string>
+
+    <!-- 保活与自检 -->
+    <string name="keep_alive_channel">秒跳保活</string>
+    <string name="keep_alive_channel_warn">秒跳提醒</string>
+    <string name="keep_alive_text">秒跳正在运行，开屏广告会被自动跳过</string>
+    <string name="service_lost_title">无障碍授权已被系统撤销</string>
+    <string name="service_lost_text">检测到「秒跳」的无障碍权限被关闭（常见原因：清理后台）。点击这里重新开启，否则无法跳过广告。</string>
+    <string name="service_lost_hint">无障碍权限被系统关闭了，请重新开启</string>
+
+    <string name="sw_master">总开关</string>
+    <string name="sw_master_desc">关闭后所有功能暂停</string>
+    <string name="sw_splash">跳过开屏广告</string>
+    <string name="sw_splash_desc">识别并点击开屏页的「跳过」</string>
+    <string name="sw_popup">关闭应用内弹窗</string>
+    <string name="sw_popup_desc">更新提示、活动弹窗等</string>
+    <string name="sw_guard">防跳转</string>
+    <string name="sw_guard_desc">被摇一摇带去商店/浏览器时自动返回（长按可加包名）</string>
+    <string name="sw_all">对全部应用生效</string>
+    <string name="sw_all_desc">关闭后只处理规则库里的应用</string>
+
+    <string name="sw_learn">自动学习</string>
+    <string name="sw_learn_desc">规则没命中时自己认按钮，认准了就记住</string>
+
+    <string name="section_source">规则来源</string>
+    <string name="remote_hint">https://…/rules.json</string>
+    <string name="btn_remote_sync">立即同步</string>
+    <string name="btn_remote_clear">清除缓存</string>
+
+    <string name="btn_inspector">自检 / 探测器</string>
+    <string name="btn_rules">规则管理</string>
+    <string name="section_log">最近记录</string>
+</resources>

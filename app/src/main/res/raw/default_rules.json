@@ -1,0 +1,273 @@
+{
+  "_note": "内置规则只是起始模板。不同 App 版本改版频繁，建议用「节点探测器」抓到自己手机上的真实控件后，在「规则管理」里写自定义规则覆盖。",
+  "version": 1,
+  "defaults": {
+    "keywords": [
+      "跳过",
+      "跳过广告",
+      "跳过开屏",
+      "关闭广告",
+      "关闭开屏",
+      "关闭开屏广告",
+      "跳过开屏广告",
+      "点击跳过",
+      "跳过 >",
+      "跳过›",
+      "Skip Ad",
+      "Skip",
+      "skip",
+      "跳过动画",
+      "tv_skip",
+      "skip_btn"
+    ],
+    "exclude": [
+      "跳过登录",
+      "跳过引导",
+      "跳过教程",
+      "跳过新手",
+      "跳过设置",
+      "跳过此步",
+      "跳过验证",
+      "跳过绑定",
+      "跳过介绍",
+      "跳过说明",
+      "跳过并",
+      "跳过实名",
+      "不允许跳过"
+    ],
+    "delay": 300,
+    "duration": 8000,
+    "interval": 160
+  },
+  "apps": {
+    "com.miaotiao.adsample": {
+      "name": "广告测试台",
+      "_note": "仅用于回归测试台 variant 950，正式手机上装了这个包才会生效",
+      "popups": [
+        {
+          "when": [
+            "会员特惠"
+          ],
+          "action": [
+            "以后再"
+          ]
+        }
+      ]
+    },
+    "com.ss.android.ugc.aweme": {
+      "name": "抖音",
+      "splash": {
+        "keywords_append": [
+          "tv_skip",
+          "skip_btn"
+        ]
+      },
+      "popups": [
+        {
+          "when": [
+            "检测到更新"
+          ],
+          "action": [
+            "以后再",
+            "以后再说",
+            "取消"
+          ]
+        },
+        {
+          "when": [
+            "新版本"
+          ],
+          "action": [
+            "以后再说",
+            "暂不更新"
+          ]
+        }
+      ]
+    },
+    "com.tencent.mm": {
+      "name": "微信",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.taobao.taobao": {
+      "name": "淘宝",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      },
+      "popups": [
+        {
+          "when": [
+            "立即更新",
+            "版本更新"
+          ],
+          "action": [
+            "以后再说",
+            "暂不更新",
+            "下次再说"
+          ]
+        }
+      ]
+    },
+    "com.jingdong.app.mall": {
+      "name": "京东",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.xunmeng.pinduoduo": {
+      "name": "拼多多",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.sina.weibo": {
+      "name": "微博",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.zhihu.android": {
+      "name": "知乎",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.xingin.xhs": {
+      "name": "小红书",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "tv.danmaku.bili": {
+      "name": "哔哩哔哩",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.eg.android.AlipayGphone": {
+      "name": "支付宝",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.sankuai.meituan": {
+      "name": "美团",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      },
+      "popups": [
+        {
+          "when": [
+            "发现新版本"
+          ],
+          "action": [
+            "以后再说",
+            "暂不更新"
+          ]
+        }
+      ]
+    },
+    "com.netease.cloudmusic": {
+      "name": "网易云音乐",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      },
+      "popups": [
+        {
+          "when": [
+            "新版本"
+          ],
+          "action": [
+            "以后再说",
+            "暂不更新"
+          ]
+        }
+      ]
+    },
+    "com.tencent.mobileqq": {
+      "name": "QQ",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.tencent.qqlive": {
+      "name": "腾讯视频",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.qiyi.video": {
+      "name": "爱奇艺",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.youku.phone": {
+      "name": "优酷",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.hunantv.imgo.activity": {
+      "name": "芒果TV",
+      "splash": {
+        "keywords_append": [
+          "跳过"
+        ]
+      }
+    },
+    "com.weilaishanhai.oopz": {
+      "name": "Oopz",
+      "splash": {
+        "keywords": [
+          "跳过",
+          "跳过广告"
+        ],
+        "delay": 400,
+        "duration": 9000,
+        "interval": 140
+      },
+      "popups": [
+        {
+          "when": [
+            "青少年模式"
+          ],
+          "action": [
+            "我知道了"
+          ]
+        }
+      ]
+    }
+  }
+}

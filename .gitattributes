@@ -1,0 +1,13 @@
+# 统一换行符：源码与脚本一律 LF，避免 Windows 上 clone 后
+# gradlew / *.sh 带 CRLF 而在 Linux（含 GitHub Actions）报 bad interpreter
+* text=auto eol=lf
+*.bat text eol=crlf
+*.sh text eol=lf
+gradlew text eol=lf
+
+# 二进制文件不要做文本转换
+*.jar binary
+*.png binary
+*.apk binary
+*.zip binary
+*.jks binary

@@ -1,0 +1,23 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild
+.cxx
+
+# 签名材料绝对不能进版本库：泄漏即可伪造同签名覆盖安装
+keystore/
+*.jks
+*.keystore
+local.properties
+
+# 构建产物 / 历史发布包：体积大，且含旧版本 APK，不入库
+dist/
+*.apk
+*.aab
+*.ap_
+*.sha256
+*.zip

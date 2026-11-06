@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  刻意不注册 flagRetrieveInteractiveWindows / typeWindowsChanged。
+
+  原因：Android 16 + HyperOS 上，一旦注册这两项，服务的窗口列表会变成
+  「缓存快照」，只有收到 TYPE_WINDOWS_CHANGED 时才刷新。而这台机器上
+  HyperOS 会时不时停掉事件派发（见 SkipAccessibilityService 里 lastEventAt 的注释），
+  快照就永远停在切回桌面那一刻——实测前台已经是 AdActivity，
+  getWindows() 里还只有 launcher。扫描出来的树是上一次 ContentActivity 的
+  残留节点，坐标甚至左右倒挂，于是「跳过」永远找不到。
+
+  只保留 rootInActiveWindow + 文本/内容变化事件，每次都是现问系统要，
+  不依赖缓存。代价是拿不到多窗口信息，但开屏广告永远在活动窗口里。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_desc"
+    android:notificationTimeout="80"
+    android:summary="@string/accessibility_summary" />
