@@ -57,6 +57,15 @@ jobs:
       - name: 编译 debug 包
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # 回退判定跑在 JVM 单元测试里（app/src/test/.../GuardDecisionTest.kt）。
+      #
+      # 这一步不能省：「什么时候该按返回」依赖一堆时序条件，真机上几乎无法
+      # 稳定复现，用户自己都说不清是哪一步触发的。除了拿真机碰运气，
+      # 唯一能长期维护的办法就是这套断言——谁改了判定逻辑、谁动了名单，
+      # CI 一跑就知道有没有把「用户主动打开某个 App」误判成「广告跳转」。
+      - name: 跑单元测试（回退判定矩阵）
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
       - name: 上传 APK
         uses: actions/upload-artifact@v4
         with:

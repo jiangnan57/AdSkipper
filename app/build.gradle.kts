@@ -60,8 +60,8 @@ android {
         applicationId = "com.miaotiao.adskip"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "1.3.3"
+        versionCode = 10
+        versionName = "1.3.4"
     }
 
     signingConfigs {
@@ -111,4 +111,12 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
+
+    // 回退判定跑在 JVM 单元测试里。
+    //
+    // 为什么必须有：「什么时候该按返回」依赖一堆时序条件，真机上几乎无法
+    // 稳定复现——用户自己都说不清是哪一步触发的。除了拿真机碰运气，
+    // 唯一能长期维护的办法就是把判定抽成纯函数，用断言把
+    // 「哪些组合该回退、哪些绝对不该回退」钉死。
+    testImplementation("junit:junit:4.13.2")
 }

@@ -128,26 +128,115 @@ object SplashScanner {
         val tree = Access.walk(root, Access.MAX_NODES)
         tree.forEach(pool::track)
 
+        // ---------------- 页面特征统计（必须与规则命中解耦）
+        //
+        // 旧实现把统计放在慢路径里，而慢路径在「规则命中」时会提前 return，
+        // 于是 contentPage 永远是 false。
+        //
+        // 后果非常严重：通用规则的关键词含「跳过」「Skip」，
+        // 内容页上只要出现任何一个「跳过」类控件，规则就会命中，
+        // contentPage 就永远是 false → 「来源已经进入正片」这个标记
+        // 永远置不上 → 防跳转把用户自己点的跳转也当成广告跳走弹回去。
+        // 「番茄小说打开个人主页被弹回」「NFC 打开支付宝被弹回」
+        // 这两类误伤的深层原因就在这里。
+        //
+        // 所以统计必须在规则命中判断**之前**算，和规则命中完全无关。
+        val stats = pageStats(tree, screenH, screenArea)
+
         // ---------------- 规则命中（本地匹配，零额外 IPC）
         val fast = ruleHits(tree, splash, screenW, screenH, screenArea)
         if (fast.isNotEmpty()) {
             val top = rank(fast)
-            val result = Result(tree.size, elapsed(t0), top.firstOrNull(), top, 0L, full = false)
+            val result = Result(
+                tree.size, elapsed(t0), top.firstOrNull(), top, stats.bigArea,
+                full = false, contentPage = stats.contentPage
+            )
             pool.releaseExcept(top)
             return result
         }
         if (!full && !allowHeuristic) {
-            val result = Result(tree.size, elapsed(t0), null, emptyList(), 0L, full = false)
+            val result = Result(
+                tree.size, elapsed(t0), null, emptyList(), stats.bigArea,
+                full = false, contentPage = stats.contentPage
+            )
             pool.releaseExcept(emptyList())
             return result
         }
 
         // ---------------- 慢路径：在同一棵树上做启发式判断
+        //
+        // 页面统计已经在上面积好了，这里只补启发式候选。
         val maxAlgoArea = (screenArea * 0.06f).toLong()
         val ex = splash.ex
 
         val found = ArrayList<Candidate>(8)
         val algo = ArrayList<Candidate>(6)
+
+        if (allowHeuristic) {
+            for (n in tree) {
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                if (r.width() <= 0 || r.height() <= 0) continue
+                val area = r.width().toLong() * r.height()
+                val text = n.text
+                val desc = n.contentDescription
+                val vid = n.viewIdResourceName
+                val hasText = !text.isNullOrBlank() || !desc.isNullOrBlank()
+                if (!hasText && vid.isNullOrBlank()) {
+                    // 无文字、无 id 的右上角 X 也要有机会进入启发式判断
+                    heuristic(n, text, desc, vid, r, area, screenW, screenH, screenArea, maxAlgoArea)
+                        ?.let(algo::add)
+                } else if (!(ex.isNotEmpty() && Matcher.hitAny(ex, n))) {
+                    // 规则命中已经在 ruleHits 里处理过了——能走到这里说明
+                    // 规则没命中，这里只需要补启发式候选。
+                    heuristic(n, text, desc, vid, r, area, screenW, screenH, screenArea, maxAlgoArea)
+                        ?.let(algo::add)
+                }
+            }
+        }
+
+        // 启发式是「猜」，所以要求更硬：整页一张大图、几乎没有可点元素
+        val strictAdPage = stats.bigArea >= screenArea * 0.70f &&
+            stats.clickable <= 4 && !stats.contentPage
+        if (allowHeuristic && strictAdPage) {
+            for (a in algo) {
+                if (a.score > 1100) continue
+                // 纯图标 ×：页面上没出现「广告」字样就当它是顶栏图标，不点
+                if (a.reason == REASON_X && !stats.adSignal) continue
+                found.add(a)
+            }
+        }
+
+        val top = rank(found)
+        val result = Result(
+            stats.count, elapsed(t0), top.firstOrNull(), top, stats.bigArea,
+            full = true, contentPage = stats.contentPage
+        )
+        pool.releaseExcept(top)
+        return result
+    }
+
+    /**
+     * 页面特征统计。
+     *
+     * 单独抽出来的原因见调用处：内容页判定**不能**依赖「规则有没有命中」。
+     */
+    private class PageStats(
+        val count: Int,
+        val bigArea: Long,
+        val scrollArea: Long,
+        val clickable: Int,
+        val textCount: Int,
+        val tabHits: Int,
+        val adSignal: Boolean,
+        val contentPage: Boolean
+    )
+
+    private fun pageStats(
+        tree: List<AccessibilityNodeInfo>,
+        screenH: Int,
+        screenArea: Long
+    ): PageStats {
         var bigArea = 0L
         var scrollArea = 0L
         var clickable = 0
@@ -158,59 +247,42 @@ object SplashScanner {
 
         for (n in tree) {
             count++
-
             val r = Rect()
             n.getBoundsInScreen(r)
             val visible = r.width() > 0 && r.height() > 0
-            val area = if (visible) r.width().toLong() * r.height() else 0L
+            if (!visible) continue
+            val area = r.width().toLong() * r.height()
+
+            if (n.isClickable) clickable++
+            if (n.isScrollable && area > scrollArea) scrollArea = area
 
             val text = n.text
             val desc = n.contentDescription
             val vid = n.viewIdResourceName
             val hasText = !text.isNullOrBlank() || !desc.isNullOrBlank()
 
-            if (visible) {
-                if (n.isClickable) clickable++
-                if (n.isScrollable && area > scrollArea) scrollArea = area
-
-                // 内容页的两个特征：文字多、底部有导航/频道栏
-                if (hasText) {
-                    textCount++
-                    val t = text
-                    if (t != null && t.length <= 24) {
-                        if (AD_WORD.containsMatchIn(t)) adSignal = true
-                        if (r.top > screenH * 0.80f && TAB_WORDS.matches(t.trim())) tabHits++
-                    }
-                    val d = desc
-                    if (d != null && d.length <= 24 && AD_WORD.containsMatchIn(d)) adSignal = true
+            if (hasText) {
+                textCount++
+                val t = text
+                if (t != null && t.length <= 24) {
+                    if (AD_WORD.containsMatchIn(t)) adSignal = true
+                    if (r.top > screenH * 0.80f && TAB_WORDS.matches(t.trim())) tabHits++
                 }
-
-                // 诊断：把带文字 / 带 id 的节点原样打出来，用来确认
-                // 「跳过」按钮到底在不在树里、是什么形态
-                if (DEBUG_NODES && (hasText || !vid.isNullOrBlank())) {
-                    Log.d(
-                        "AdSkip",
-                        "node t=${text} d=${desc} id=${vid} clk=${n.isClickable} " +
-                            "area=${area} r=${r.top},${r.left},${r.right},${r.bottom}"
-                    )
-                }
-
-                if (!hasText && vid.isNullOrBlank()) {
-                    if (area > bigArea) bigArea = area
-                    // 无文字、无 id 的右上角 X 也要有机会进入启发式判断
-                    if (allowHeuristic) {
-                        heuristic(n, text, desc, vid, r, area, screenW, screenH, screenArea, maxAlgoArea)
-                            ?.let(algo::add)
-                    }
-                } else if (!(ex.isNotEmpty() && Matcher.hitAny(ex, n))) {
-                    // 规则命中已经在 ruleHits 里处理过了——能走到这里说明
-                    // 规则没命中，这里只需要补启发式候选。
-                    if (allowHeuristic) {
-                        heuristic(n, text, desc, vid, r, area, screenW, screenH, screenArea, maxAlgoArea)
-                            ?.let(algo::add)
-                    }
-                }
+                val d = desc
+                if (d != null && d.length <= 24 && AD_WORD.containsMatchIn(d)) adSignal = true
             }
+
+            // 诊断：把带文字 / 带 id 的节点原样打出来，用来确认
+            // 「跳过」按钮到底在不在树里、是什么形态
+            if (DEBUG_NODES && (hasText || !vid.isNullOrBlank())) {
+                Log.d(
+                    "AdSkip",
+                    "node t=${text} d=${desc} id=${vid} clk=${n.isClickable} " +
+                        "area=${area} r=${r.top},${r.left},${r.right},${r.bottom}"
+                )
+            }
+
+            if (!hasText && vid.isNullOrBlank() && area > bigArea) bigArea = area
         }
 
         // 内容页判定：可滚列表 / 入口多 / 底部有导航栏 / 文字密集，
@@ -218,24 +290,9 @@ object SplashScanner {
         val contentPage = scrollArea >= screenArea * 0.22f ||
             clickable > 6 || tabHits > 0 || textCount > 55
 
-        // 启发式是「猜」，所以要求更硬：整页一张大图、几乎没有可点元素
-        val strictAdPage = bigArea >= screenArea * 0.70f && clickable <= 4 && !contentPage
-        if (allowHeuristic && strictAdPage) {
-            for (a in algo) {
-                if (a.score > 1100) continue
-                // 纯图标 ×：页面上没出现「广告」字样就当它是顶栏图标，不点
-                if (a.reason == REASON_X && !adSignal) continue
-                found.add(a)
-            }
-        }
-
-        val top = rank(found)
-        val result = Result(
-            count, elapsed(t0), top.firstOrNull(), top, bigArea,
-            full = true, contentPage = contentPage
+        return PageStats(
+            count, bigArea, scrollArea, clickable, textCount, tabHits, adSignal, contentPage
         )
-        pool.releaseExcept(top)
-        return result
     }
 
     /** 调用方使用完 best / candidates 后调用，幂等且不会重复释放同一对象。 */

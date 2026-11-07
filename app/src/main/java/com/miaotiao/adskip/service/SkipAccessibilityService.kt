@@ -433,11 +433,31 @@ class SkipAccessibilityService : AccessibilityService() {
      *       至少把用户从广告页带走，他再点一下原 App 就能回来。
      *
      * 每一级都先确认「前台还是那个落地页」才动手，不会误伤用户自己的页面。
+     *
+     * **v1.3.4**：第 1 级原来是无条件按返回（旧代码里这一级根本没复核）。
+     * 400ms 里用户完全可能已经切走了——比如广告落地页刚起来、用户手快
+     * 点了别的 App，那一发返回就砸在用户自己的界面上。
+     * 「用户莫名其妙被弹回去」的第二类投诉就是这么来的。
      */
     fun backOffLanding(landingPkg: String, originPkg: String?) {
         main.postDelayed({
-            val ok = runCatching { performGlobalAction(GLOBAL_ACTION_BACK) }.getOrDefault(false)
-            Log.i(TAG, "guard back#1 pkg=$landingPkg ok=$ok")
+            val h = scanHandler ?: return@postDelayed
+            // 读窗口必须在 scanHandler 上做，主线程读会死锁（见 poller 注释）
+            h.post {
+                val cur = runCatching { activePackage() }.getOrNull()
+                // cur == null 表示系统暂时没给窗口（落地页刚冷启动时很常见），
+                // 这时按返回是安全的——400ms 内用户几乎不可能刚好切走。
+                // 但如果前台明确是**别的**包，说明用户已经自己切走了，绝不能按。
+                if (cur != null && cur != landingPkg) {
+                    Log.i(TAG, "guard back#1 skip pkg=$landingPkg cur=$cur")
+                    return@post
+                }
+                main.post {
+                    val ok = runCatching { performGlobalAction(GLOBAL_ACTION_BACK) }
+                        .getOrDefault(false)
+                    Log.i(TAG, "guard back#1 pkg=$landingPkg ok=$ok")
+                }
+            }
         }, 400L)
 
         main.postDelayed({
@@ -459,7 +479,7 @@ class SkipAccessibilityService : AccessibilityService() {
             val h = scanHandler ?: return@postDelayed
             h.post {
                 val still = runCatching { activePackage() }.getOrNull()
-                if (still != landingPkg) return@post
+                if (still != null && still != landingPkg) return@post
                 main.post {
                     val home = runCatching { performGlobalAction(GLOBAL_ACTION_HOME) }
                         .getOrDefault(false)
@@ -475,6 +495,19 @@ class SkipAccessibilityService : AccessibilityService() {
      *
      * Android 10+ 对「后台启动 Activity」有全局限制，无障碍服务属于有豁免的
      * 少数场景之一；即使被限制，也只会静默失败，下一级会兜住。
+     *
+     * flag 的选择（这里试错过一次，记下来免得再改错）：
+     * · **FLAG_ACTIVITY_NEW_TASK** 必须有：来源 App 的任务栈还在后台，
+     *   不带它的话新 Activity 会加到**无障碍服务自己**的任务栈里，用户眼前
+     *   什么都不会变。
+     * · **FLAG_ACTIVITY_RESET_TASK_IF_NEEDED** 保留。它只在「任务栈不存在，
+     *   或者任务栈的根 Intent 和这里给的不一致」时才重置任务栈；
+     *   我们给的正是该 App 的桌面启动 Intent，正常情况下两者一致，
+     *   于是任务栈只是被整体带到前台，**栈顶还是用户原来那个页面**。
+     *   进程被杀、任务栈没了的时候它会重建一个——那正好是我们要的冷启动。
+     * · **不要加 FLAG_ACTIVITY_REORDER_TO_FRONT**：它会把「启动 Activity」
+     *   顶到任务栈最前面。用户本来在 App 里的第 3 章 / 个人页，
+     *   弹回来却落在首页——等于用另一种方式把用户弄丢。
      */
     private fun relaunch(pkg: String): Boolean {
         val i = runCatching { packageManager.getLaunchIntentForPackage(pkg) }.getOrNull() ?: return false
@@ -568,11 +601,15 @@ class SkipAccessibilityService : AccessibilityService() {
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 if (pkg == "com.android.systemui") return
+                // cold 必须在本次事件改写状态**之前**算出来。
+                // onForegroundChanged 末尾会更新 lastPkg / lastAppFgAt，
+                // 提前算就永远是 false，「冷启动」这个信号就废了。
+                val cold = calcCold()
                 // 键盘弹出不是「跳转来源」，让它参与防跳转的时间窗会污染判定
                 if (pkg !in imePackages && pkg !in IME_FALLBACK) {
-                    JumpGuard.onForeground(pkg, this)
+                    JumpGuard.onForeground(pkg, cold, this)
                 }
-                onForegroundChanged(pkg)
+                onForegroundChanged(pkg, cold)
             }
 
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
@@ -596,10 +633,29 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun onForegroundChanged(pkg: String) {
+    /**
+     * 这个 App 是不是「冷启动」进来的。
+     *
+     * 判据和 [onForegroundChanged] 里原本写的一样，但**只读不写**：
+     * 必须在本轮事件改写 lastPkg / lastAppFgAt 之前调用，
+     * 否则算出来永远是 false。
+     *
+     * 这个信号对「防跳转」很关键：摇一摇广告只可能发生在冷启动阶段，
+     * 而它又是「该不该弹回」的核心判据之一。猜错一次就是一次误回退。
+     */
+    private fun calcCold(): Boolean {
+        val prev = lastPkg
+        val cameBack = leftAppAt > lastAppFgAt
+        return cameBack || prev == null || isPassThrough(prev)
+    }
+
+    private fun onForegroundChanged(pkg: String, cold: Boolean) {
         if (!Prefs.skipSplash && !Prefs.autoLearn) {
             stopWatch()
             lastPkg = pkg
+            // 这一支原来不更新 lastAppFgAt，导致 cameBack 永远为真、
+            // cold 永远为 true。防跳转现在也要用 cold，必须一起维护。
+            lastAppFgAt = SystemClock.uptimeMillis()
             return
         }
         Log.d(TAG, "fg changed pkg=$pkg lastPkg=$lastPkg passThrough=${isPassThrough(pkg)}")
@@ -617,19 +673,12 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val now = SystemClock.uptimeMillis()
-        val prev = lastPkg
         val changed = pkg != lastPkg
         // 包名没变也必须重开一轮：用户从桌面 / 最近任务重新打开同一个 App，
         // 那是全新一次冷启动，同样有开屏广告。
         // 少了这个判断，同一个 App 第二次打开起就永远不再监测，
         // 表现就是「刚装好能用，用一会儿就跳不过了」。
         val cameBack = leftAppAt > lastAppFgAt
-
-        // 「冷启动」= 上一个前台是桌面 / 系统页 / 输入法（或者干脆没有），
-        // 或者刚从桌面回来。只有这种情况下才允许自识别——
-        // App 内部切页面时用的同样是全屏大图（详情页、评论区），
-        // 一旦在这里猜，就会点到用户自己的按钮。
-        val cold = cameBack || prev == null || isPassThrough(prev)
 
         lastPkg = pkg
         lastAppFgAt = now
@@ -699,8 +748,16 @@ class SkipAccessibilityService : AccessibilityService() {
 
         Log.d(TAG, "poll fg pkg=$pkg silent=${eventSilentMs}ms")
 
-        if (pkg != "com.android.systemui") JumpGuard.onForeground(pkg, this)
-        onForegroundChanged(pkg)
+        // 轮询这条路也要算 cold：事件通道断掉时，前台切换只能靠轮询发现，
+        // 「冷启动」这个判据缺了就会漏掉摇一摇广告。
+        val cold = calcCold()
+        // 输入法要过滤掉，和事件路径保持一致。
+        // 软键盘弹出时 rootInActiveWindow 在不少 ROM 上返回输入法包，
+        // 一旦让它顶替掉来源 App，真实来源就被遗忘 → origin 链被截断 → 漏拦。
+        if (pkg != "com.android.systemui" && pkg !in imePackages && pkg !in IME_FALLBACK) {
+            JumpGuard.onForeground(pkg, cold, this)
+        }
+        onForegroundChanged(pkg, cold)
 
         // 刚切到这个 App，立刻查一次弹窗，别等下一轮轮询。
         // 很多 App 是「打开就弹运营弹层」，晚一拍就错过。
@@ -767,6 +824,10 @@ class SkipAccessibilityService : AccessibilityService() {
         watchDeadline = watchStart + splash.durationMs
         watching = true
         watchCold = cold
+        // 告诉防跳转：来源 App 现在处在「可监测的开屏阶段」。
+        // 这是「来源仍在开屏」这个判据的唯一依据——只有真的起了监测窗口
+        // 才有资格说它还停在开屏期，没监测过的一律当作「不知道」，宁可不拦。
+        JumpGuard.noteSplashStarted(pkg)
         coordTapped = false
         watchScans = 0
         watchCost = 0L
@@ -791,6 +852,9 @@ class SkipAccessibilityService : AccessibilityService() {
                 TAG,
                 "watch end pkg=$watchPkg scans=$watchScans cost=${watchCost}ms hit=$watchHit"
             )
+            // 监测窗口结束 ≠ 用户已经进入正片，所以这里不清「被监测过」标记，
+            // 只有扫到内容页才算（见 JumpGuard.noteContentPage）。
+            watchPkg?.let { JumpGuard.noteSplashEnded(it) }
             // 扫了一整轮什么都没点，把原因留在应用内记录里，
             // 用户不用连电脑也能看到「是没找到按钮，还是根本没拿到界面」
             if (!watchHit && watchScans > 0) {
@@ -856,6 +920,42 @@ class SkipAccessibilityService : AccessibilityService() {
         if (!posted) scanBusy.set(false)
     }
 
+    /**
+     * 监测窗口到期前的最后一眼：只看「来源是不是已经进入正片」，不点任何东西。
+     *
+     * 为什么需要这一眼：监测窗口长度来自规则里的 `splash.duration`
+     * （内置默认 8 秒，规则可以配到 10 秒）。有些 App 的开屏广告比这还长，
+     * 内容页出现在窗口之后，来源就永远停在「还没进正片」，
+     * 用户随后在 App 里点了个商品卡跳淘宝，就会被误判成广告跳走 → 弹回。
+     *
+     * 这一眼是纯读取：只调 [JumpGuard.noteContentPage]，不产生任何点击。
+     * 代价是监测窗口结束后多一次整树扫描（开屏页几毫秒，内容页几百毫秒）。
+     *
+     * 换来的是「误回退」这个最招骂的 bug 少一类成因——值得。
+     */
+    private fun checkContentPageOnce(pkg: String) {
+        val rs = rules ?: return
+        val app = rs.apps[pkg] ?: if (Prefs.skipAllApps) rs.generic else return
+        val root = pickRoot(pkg) ?: return
+        if (runCatching { root.packageName?.toString() }.getOrNull() != pkg) {
+            Access.recycle(root)
+            return
+        }
+        val dm = resources.displayMetrics
+        val result = runCatching {
+            // allowHeuristic=false：这一眼不允许猜，也不点。
+            SplashScanner.scan(root, app.splash, dm.widthPixels, dm.heightPixels, false, true)
+        }.getOrNull() ?: return
+        try {
+            if (result.contentPage) {
+                Log.d(TAG, "final content page pkg=$pkg nodes=${result.nodes}")
+                JumpGuard.noteContentPage(pkg)
+            }
+        } finally {
+            SplashScanner.recycle(result)
+        }
+    }
+
     /** @return true 表示继续轮询 */
     private fun doScan(): Boolean {
         if (!Prefs.masterEnabled) {
@@ -865,6 +965,8 @@ class SkipAccessibilityService : AccessibilityService() {
         val pkg = watchPkg ?: return false
         val now = SystemClock.uptimeMillis()
         if (now > watchDeadline) {
+            // 到期前最后再看一眼：只判断「来源是不是已经进入正片」，不点任何东西。
+            checkContentPageOnce(pkg)
             stopWatch()
             return false
         }
