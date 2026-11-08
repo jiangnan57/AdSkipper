@@ -247,6 +247,22 @@ object Access {
         return runCatching { service.dispatchGesture(gesture, null, null) }.getOrDefault(false)
     }
 
+    /**
+     * 完整文案，**不截断**。
+     *
+     * label() 会 take(14)，那是给日志和面板显示用的。安全判断绝不能吃截断过的
+     * 文案——「点击关闭广告并退出小说」截断后的前 14 个字里如果正好只剩广告词，
+     * 危险动词就被切掉了，判据会得出「可以点」的结论。
+     * 真实事故：番茄小说阅读页上这个节点被点掉，直接退出到书架。
+     */
+    fun fullLabel(node: AccessibilityNodeInfo): String {
+        val t = runCatching { node.text?.toString() }.getOrNull()
+        if (!t.isNullOrBlank()) return t
+        val d = runCatching { node.contentDescription?.toString() }.getOrNull()
+        if (!d.isNullOrBlank()) return d
+        return runCatching { node.viewIdResourceName }.getOrNull().orEmpty()
+    }
+
     fun label(node: AccessibilityNodeInfo): String {
         val t = runCatching { node.text?.toString() }.getOrNull()
         if (!t.isNullOrBlank()) return t.take(14)

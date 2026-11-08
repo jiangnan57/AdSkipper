@@ -85,6 +85,7 @@ class AdActivity : AppCompatActivity() {
             13 -> addSkipInWrapper(root, w, h)
             14 -> addCornerSkip(root, w, h, "跳 过", topMarginDp = 28, rightMarginDp = 16)
             15 -> addSkipTouchOnlyInAdContainer(ad, w, h)
+            16 -> addExitTrap(root, w, h)
             99 -> setupContentControl(root, w, h)
             950 -> setupPopupOverlay(root, w, h)
             901 -> setupNovelPage(root, w, h)
@@ -728,6 +729,36 @@ class AdActivity : AppCompatActivity() {
         skipped = true
         Log.i(tag, "skipClicked variant=$variantId")
         gotoContent("clicked")
+    }
+
+    /**
+     * v1.3.6 回归样本：番茄小说阅读页上那个「点击关闭广告并退出小说」。
+     *
+     * 节点文字为空、只有 contentDescription——和真实抓到的那个节点一模一样。
+     * 位置（右上角）和尺寸（36dp）也都按开屏跳过键的规格来，确保它不是靠
+     * 「位置不像」被挡掉的，而是靠语义否决词。
+     * 真被点到就打 exitClicked 并离开，模拟 ReaderActivity 被 finish。
+     */
+    private fun addExitTrap(root: FrameLayout, w: Int, h: Int) {
+        val v = TextView(this)
+        v.text = ""
+        v.contentDescription = "点击关闭广告并退出小说"
+        v.setTextColor(Color.WHITE)
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        v.gravity = Gravity.CENTER
+        v.background = GradientDrawable().apply {
+            cornerRadius = dp(6).toFloat()
+            setColor(Color.parseColor("#B3000000"))
+        }
+        val lp = FrameLayout.LayoutParams(dp(36), dp(36))
+        lp.gravity = Gravity.TOP or Gravity.END
+        lp.topMargin = dp(28)
+        lp.rightMargin = dp(16)
+        v.setOnClickListener {
+            Log.i(tag, "exitClicked variant=$variantId  <- 点到「关闭广告并退出小说」了")
+            gotoContent("exit")
+        }
+        root.addView(v, lp)
     }
 
     private fun gotoContent(how: String) {

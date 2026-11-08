@@ -26,6 +26,27 @@ object SafeWords {
     )
 
     /**
+     * **绝对否决词**：出现即拒绝，优先级高于下面所有「放行」判断。
+     *
+     * 起因（v1.3.6，番茄小说「书页退回书架」）：阅读页上有个节点的无障碍描述是
+     * 「点击关闭广告并退出小说」。它含「关闭广告」→ AD_TOKEN 命中 → 直接放行 →
+     * 一点下去，ReaderActivity 就被 finish 了，用户看到的就是「书页退回书架」。
+     * 这个节点每 4 秒被点一次，用户重新进书页再被弹回去，连看到第几章都丢。
+     *
+     * 教训：`AD_TOKEN 命中即放行` 是个错误的短路。文案里**同时**出现广告词和
+     * 退出语义时，它不是跳过按钮，而是「关闭广告（顺便退出）」这类描述性文案。
+     * 所以这里必须先判否决词，再谈放行。
+     *
+     * 这些词在任何正常的「跳过广告」按钮上都不可能出现——只要出现，宁可漏跳。
+     */
+    private val VETO_WORD = Regex(
+        "(退出|关闭书籍|关闭小说|退出阅读|返回|上一页|下一页|目录|书架|书城|" +
+            "(?<![A-Za-z])back(?![A-Za-z])|(?<![A-Za-z])exit(?![A-Za-z])|" +
+            "(?<![A-Za-z])quit(?![A-Za-z])|(?<![A-Za-z])leave(?![A-Za-z]))",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
      * 普通界面控件词。
      *
      * 这些词几乎只出现在「功能按钮」上，不是广告关闭键。加进黑名单的代价是
@@ -42,8 +63,22 @@ object SafeWords {
     /** true 表示这个文案不能点 */
     fun isUnsafe(text: String?): Boolean {
         if (text.isNullOrBlank()) return false
+        // 先否决，再看放行——顺序反了就会放过「点击关闭广告并退出小说」
+        if (VETO_WORD.containsMatchIn(text)) return true
         if (AD_TOKEN.containsMatchIn(text)) return false
         return UI_WORD.containsMatchIn(text)
+    }
+
+    /**
+     * 只判「绝对否决词」，不管界面通用词。
+     *
+     * 给已经确认是关闭控件的节点用：它们的文案本来就可能是「关闭」「×」，
+     * 走 isUnsafe 会被 UI_WORD 拦掉（样本 #5「只有 ✕ 图标、描述是关闭」）。
+     * 但「退出 / 返回 / 书架」这类词即便长得再像关闭键，也绝不能放过。
+     */
+    fun isVetoed(text: String?): Boolean {
+        if (text.isNullOrBlank()) return false
+        return VETO_WORD.containsMatchIn(text)
     }
 
     /** 学习规则时用：明显是界面按钮的文案不要学成「跳过」规则 */

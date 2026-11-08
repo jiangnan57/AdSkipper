@@ -69,7 +69,7 @@ fi
 # 950 必须排在 99 之后判定之外单独处理：旧脚本用 "$V -ge 99" 判负向，
 # 会把弹窗样本也当成「不许点」的负向样本，弹窗链路从来没进过回归。
 # 快速冒烟：TEST_VARIANTS="1 2" ./test_variants.sh <序列号>
-VARIANTS="${TEST_VARIANTS:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 99 901 902 903 904 950}"
+VARIANTS="${TEST_VARIANTS:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 99 901 902 903 904 950}"
 PASS=0; FAIL=0
 for V in $VARIANTS; do
   # 息屏 / 锁屏时 rootInActiveWindow 可能拿不到目标窗口，尤其刚重绑完
@@ -89,9 +89,21 @@ for V in $VARIANTS; do
   ADCLICK=$(echo "$LOG" | grep -c "AdSample: adClicked variant=$V")
   WRONG=$(echo "$LOG" | grep -c "AdSample: wrongClicked variant=$V")
   POPUP=$(echo "$LOG" | grep -c "AdSample: popupClosed variant=$V")
+  # 16 = 「点击关闭广告并退出小说」陷阱：它长得像跳过键，但点了会退出阅读页。
+  # 这是 v1.3.6 修的那个 bug 的永久回归样本。
+  EXITCLICK=$(echo "$LOG" | grep -c "AdSample: exitClicked variant=$V")
   TOP=$(adb shell "dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity'" | grep -c "com.miaotiao.adsample" | tr -d '\r')
 
-  if [ "$V" = "950" ]; then
+  if [ "$V" = "16" ]; then
+    # 陷阱样本：不许点，且不许被带走
+    if [ "$EXITCLICK" -gt 0 ] || [ "$WRONG" -gt 0 ] || [ "$CLICKED" -gt 0 ]; then
+      RES="❌ 点了退出按钮(exit=$EXITCLICK skip=$CLICKED)"; FAIL=$((FAIL+1))
+    elif [ "$TOP" = "0" ]; then
+      RES="❌ 被带离了页面"; FAIL=$((FAIL+1))
+    else
+      RES="✅ 没点退出按钮"; PASS=$((PASS+1))
+    fi
+  elif [ "$V" = "950" ]; then
     # 弹窗样本：必须走弹窗规则关掉；开屏识别不许抢先点（CLICKED=0）
     if [ "$POPUP" -gt 0 ] && [ "$CLICKED" -eq 0 ] && [ "$WRONG" -eq 0 ]; then
       RES="✅ 弹窗已关"; PASS=$((PASS+1))

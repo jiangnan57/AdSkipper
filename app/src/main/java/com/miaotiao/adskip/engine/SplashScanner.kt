@@ -368,19 +368,32 @@ object SplashScanner {
             if (splash.ex.isNotEmpty() && Matcher.hitAny(splash.ex, n)) continue
             val vid = n.viewIdResourceName
             val label = Access.label(n)
+            // 安全判断必须吃**完整**文案：label() 会截断到 14 个字，
+            // 一旦危险动词被切在 14 字之后，判据就等于瞎了。
+            val txt = runCatching { n.text?.toString() }.getOrNull()
+            val desc = runCatching { n.contentDescription?.toString() }.getOrNull()
+            val full = Access.fullLabel(n)
             // 跳过关闭键的文案一定很短：「跳过 5」「Skip Ad」「关闭广告」。
-            // 长文案必然是正文 / 聊天消息 / 标题，哪怕里面含 Skip 也不能点。
+            // 长文案必然是正文 / 聊天消息 / 标题 / 描述，哪怕里面含 Skip 也不能点。
             // 这是 QQ 误点的直接原因：一条 `[jiangnan57/AdSkipper] Run failed`
             // 的 GitHub 通知被当成跳过按钮点了下去。
+            // 注意：这里原来写的是 label.length（已被 take(14) 截断），
+            // 所以 > 20 永远不成立——这道闸门一直是死的。改用完整文案。
             // 按控件 id 命中的不受此限（id 本身就是广告专用的）。
             val onId = vid != null && hit.hit(vid)
-            if (!onId && label.length > 20) continue
+            if (!onId && full.length > 12) continue
             n.getBoundsInScreen(r)
             val area = r.width().toLong() * r.height()
             if (area <= 0L || area > maxRuleArea) continue
             // 系统文本检索是「包含」匹配，容易把「关闭评论」「分类」带出来，
-            // 这里做一次同样的通用词拦截
-            if (SafeWords.isUnsafe(label)) continue
+            // 这里做一次同样的通用词拦截；含「退出 / 返回 / 书架」的文案
+            // 一律否决（见 SafeWords.VETO_WORD）。
+            //
+            // text 和 contentDescription 必须**分别**判：番茄那个节点是文字为空、
+            // 只有 contentDescription 写「点击关闭广告并退出小说」；
+            // 而有的 App 反过来，文字是「关闭广告」、描述里才带「并退出」。
+            // 只看其中一个就会漏掉另一半。
+            if (SafeWords.isUnsafe(txt) || SafeWords.isUnsafe(desc)) continue
             out.add(
                 Candidate(
                     n,
@@ -475,6 +488,10 @@ object SplashScanner {
             inTopRight && area <= screenArea * 0.02f
 
         if (!countdown && !closeWord && !xIcon) return null
+        // 否决词的优先级高于「已经判定成关闭控件」——番茄阅读页那个
+        // 「点击关闭广告并退出小说」在右上角、面积也小，能过 strictClose，
+        // 一旦放过就是退出到书架。text 和描述分别判，理由见 ruleHits。
+        if (SafeWords.isVetoed(text?.toString()) || SafeWords.isVetoed(desc?.toString())) return null
         // 通用界面词（分类 / 新对话 / 评论…）一律不点；
         // 已经判定成关闭控件的除外（它的文案本身就是「关闭 / ×」）
         if (!closeWord && SafeWords.isUnsafe(label)) return null

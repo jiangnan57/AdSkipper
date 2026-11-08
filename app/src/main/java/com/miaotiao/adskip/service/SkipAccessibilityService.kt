@@ -126,6 +126,15 @@ class SkipAccessibilityService : AccessibilityService() {
         /** 两次点击之间的最小间隔，防止「一轮里连点好几个候选」 */
         private const val CLICK_GAP_MS = 1_200L
 
+        /** 熔断观察窗：这段时间内同一位置被点够 BREAKER_MAX_HITS 次就停手 */
+        private const val BREAKER_WINDOW_MS = 20_000L
+
+        /** 同一位置在观察窗内被点的次数上限 */
+        private const val BREAKER_MAX_HITS = 3
+
+        /** 熔断后停手时长 */
+        private const val BREAKER_HOLD_MS = 60_000L
+
         /** 自识别最多只在开屏窗口的头 2.6 秒里用（规则命中不受限） */
         private const val HEURISTIC_WINDOW_MS = 2_600L
 
@@ -261,6 +270,42 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 防重复点击：key -> 上次点击时间 */
     private val clickedAt = HashMap<String, Long>()
+
+    // ---------------------------------------------------------------- 误点熔断
+    //
+    // 语义判断（SafeWords）能挡住已知形态，但总会遇到没见过的文案。
+    // 这一层不看语义，只看行为：如果同一个 App 的同一块区域在 20 秒内被
+    // 点了 3 次，那它就不可能是「一次性开屏按钮」，一定是认错了控件。
+    // 停手 60 秒，代价是这段时间漏跳几个广告，收益是不会再把用户正在看的
+    // 内容反复弄丢。
+    private data class ClickMark(val pkg: String, val x: Int, val y: Int, val at: Long)
+
+    private val clickMarks = ArrayDeque<ClickMark>()
+    private var breakerPkg: String? = null
+    private var breakerUntil = 0L
+
+    private fun markClick(pkg: String, r: android.graphics.Rect, now: Long) {
+        clickMarks.addLast(ClickMark(pkg, r.centerX(), r.centerY(), now))
+        // 只保留窗口内的记录，防止无界增长
+        while (clickMarks.isNotEmpty() && clickMarks.first().at < now - BREAKER_WINDOW_MS) {
+            clickMarks.removeFirst()
+        }
+    }
+
+    private fun tripped(pkg: String, r: android.graphics.Rect, now: Long): Boolean {
+        while (clickMarks.isNotEmpty() && clickMarks.first().at < now - BREAKER_WINDOW_MS) {
+            clickMarks.removeFirst()
+        }
+        val tol = dp(40)
+        var n = 0
+        for (m in clickMarks) {
+            if (m.pkg != pkg) continue
+            if (kotlin.math.abs(m.x - r.centerX()) < tol &&
+                kotlin.math.abs(m.y - r.centerY()) < tol
+            ) n++
+        }
+        return n >= BREAKER_MAX_HITS
+    }
 
     /**
      * 最近一次收到无障碍事件的时间（elapsedRealtime）。
@@ -1063,6 +1108,12 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val hit = result.best
+        // 熔断：同一个 App 的同一位置在 20 秒内被点第 3 次，几乎可以断定
+        // 我们认错了控件——真正的一次性开屏按钮不会被点这么多次。
+        // 停手 60 秒并留记录，避免「未知误点」无限重复。
+        // 真实事故：番茄阅读页那个「点击关闭广告并退出小说」每 4 秒被点一次，
+        // 用户每次重新进书页都被弹回书架。
+        if (breakerPkg == pkg && now < breakerUntil) return true
         // 扫到的是「正常内容页」（有列表 / 频道栏 / 文字密集 / 可点元素多），
         // 说明这个 App 的开屏阶段已经过去。之后它再跳电商/商店，是用户自己点的，
         // 不该按返回。判定逻辑见 JumpGuard.noteContentPage。
@@ -1076,6 +1127,15 @@ class SkipAccessibilityService : AccessibilityService() {
             if (now - lastClickAt < CLICK_GAP_MS) return true
             // 自识别是猜的，一轮监测只允许猜中一次
             if (!hit.byRule && heurClicks >= 1) return true
+
+            // 熔断第二道：这个位置已经被点过太多次，停手
+            if (tripped(pkg, hit.rect, now)) {
+                breakerPkg = pkg
+                breakerUntil = now + BREAKER_HOLD_MS
+                SkipLog.add("同一位置连点 ${BREAKER_MAX_HITS} 次，暂停该应用自动点击 60 秒")
+                Log.w(TAG, "breaker tripped pkg=$pkg label=${hit.label} rect=${hit.rect}")
+                return true
+            }
 
             // 自识别的候选要「连续两轮都在同一位置」才动手，
             // 挡掉冷启动瞬间半渲染页面上的顶栏图标（详见 heurRect 的注释）
@@ -1099,6 +1159,7 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             if (ok) {
                 lastClickAt = now
+                markClick(pkg, hit.rect, now)
                 if (!hit.byRule) heurClicks++
                 markClicked(key)
                 watchHit = true
