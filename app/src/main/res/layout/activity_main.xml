@@ -493,7 +493,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:padding="4dp"
-                        android:text="清空"
+                        android:text="清空 / 长按导出"
                         android:textColor="@color/brand"
                         android:textSize="13sp" />
                 </LinearLayout>

@@ -496,22 +496,29 @@ class SkipAccessibilityService : AccessibilityService() {
      * Android 10+ 对「后台启动 Activity」有全局限制，无障碍服务属于有豁免的
      * 少数场景之一；即使被限制，也只会静默失败，下一级会兜住。
      *
-     * flag 的选择（这里试错过一次，记下来免得再改错）：
+     * flag 的选择（这里试错过两次，都记下来免得再改错）：
      * · **FLAG_ACTIVITY_NEW_TASK** 必须有：来源 App 的任务栈还在后台，
      *   不带它的话新 Activity 会加到**无障碍服务自己**的任务栈里，用户眼前
      *   什么都不会变。
-     * · **FLAG_ACTIVITY_RESET_TASK_IF_NEEDED** 保留。它只在「任务栈不存在，
-     *   或者任务栈的根 Intent 和这里给的不一致」时才重置任务栈；
-     *   我们给的正是该 App 的桌面启动 Intent，正常情况下两者一致，
-     *   于是任务栈只是被整体带到前台，**栈顶还是用户原来那个页面**。
-     *   进程被杀、任务栈没了的时候它会重建一个——那正好是我们要的冷启动。
      * · **不要加 FLAG_ACTIVITY_REORDER_TO_FRONT**：它会把「启动 Activity」
      *   顶到任务栈最前面。用户本来在 App 里的第 3 章 / 个人页，
      *   弹回来却落在首页——等于用另一种方式把用户弄丢。
+     * · **v1.3.5 起也不要 FLAG_ACTIVITY_RESET_TASK_IF_NEEDED**。
+     *   上一次留它的理由是「只在任务栈根 Intent 不一致时才重置」，
+     *   但小窗 / 分屏 / 游戏悬浮窗这类多窗口场景下，App 的任务栈会被系统
+     *   重新组织，根 Intent 比对**经常判成不一致**，于是任务栈被整体重置、
+     *   栈顶回到启动 Activity。
+     *
+     *   实测表现正是「番茄小说从书页（ReaderActivity）退回书架
+     *   （MainFragmentActivity）」——用户的书页和进度全丢。
+     *   只带 NEW_TASK 时：任务栈存在就把原栈整体带到前台（**栈顶保留**），
+     *   任务栈被系统回收了则等价于新建一个，效果与 RESET 相同。
+     *   也就是说去掉它只在「本来就该保留原页面」的场景下改变行为，
+     *   不会有任何场景因此变得更差。
      */
     private fun relaunch(pkg: String): Boolean {
         val i = runCatching { packageManager.getLaunchIntentForPackage(pkg) }.getOrNull() ?: return false
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return runCatching { startActivity(i); true }.getOrDefault(false)
     }
 

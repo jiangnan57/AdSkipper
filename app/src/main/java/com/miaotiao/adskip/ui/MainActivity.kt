@@ -18,6 +18,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
+import com.miaotiao.adskip.BuildConfig
 import com.miaotiao.adskip.R
 import com.miaotiao.adskip.data.LearnStore
 import com.miaotiao.adskip.data.Prefs
@@ -96,12 +97,50 @@ class MainActivity : AppCompatActivity() {
             renderSyncStatus()
             toast("已清除远程规则缓存")
         }
-        findViewById<TextView>(R.id.tvClearLog).setOnClickListener { SkipLog.clear() }
+        findViewById<TextView>(R.id.tvClearLog).apply {
+            setOnClickListener { SkipLog.clear() }
+            // 长按导出：用户报「莫名其妙被弹回去」时，能直接把记录发出来。
+            // 之前只能靠 adb logcat，而这类问题往往过去几小时后才反馈，
+            // 那时 logcat 环形缓冲早就滚掉了（HyperOS 上甚至会被整段清空）。
+            setOnLongClickListener { exportLog(); true }
+        }
         // 状态副标题本身就是「保活问题」的修复入口：点一下就去对应的系统开关
         tvSubStatus.setOnClickListener { fixKeepAlive() }
 
         ensureNotifyPermission()
         handleDeepLink(intent)
+    }
+
+    // ------------------------------------------------------------------ 导出记录
+
+    /**
+     * 把「最近记录」通过系统分享发出去。
+     *
+     * 记录会同时落盘到 `filesDir/skiplog.txt`（见 [SkipLog]），所以进程被杀、
+     * 手机重启之后仍然在——这正是排「莫名其妙被弹回去」最需要的东西：
+     * 用户反馈的时候，现场往往已经过去几个小时，logcat 早就滚没了。
+     *
+     * 走 ACTION_SEND 而不是写文件到外部存储：不用申请存储权限，
+     * 用户想发到哪就发到哪（微信、邮件、备忘录都行）。
+     */
+    private fun exportLog() {
+        val lines = SkipLog.snapshot()
+        if (lines.isEmpty()) {
+            toast("还没有记录")
+            return
+        }
+        val text = buildString {
+            append("秒跳 v").append(BuildConfig.VERSION_NAME).append(" 记录（最新在上，共 ")
+            append(lines.size).append(" 条）\n\n")
+            lines.forEach { append(it).append('\n') }
+        }
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "秒跳运行记录")
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        runCatching { startActivity(Intent.createChooser(send, "导出记录")) }
+            .onFailure { toast("没有可用的分享应用") }
     }
 
     // ------------------------------------------------------------------ 保活 / 被系统冻结

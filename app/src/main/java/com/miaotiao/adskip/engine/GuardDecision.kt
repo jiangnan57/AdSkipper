@@ -81,6 +81,50 @@ object GuardDecision {
      */
     const val BACK_COOLDOWN_MS = 3_000L
 
+    /**
+     * 多窗口（小窗 / 分屏 / 游戏悬浮窗）的识别窗口。
+     *
+     * 这类场景下**两块界面同时可见**，前台包名会在两个 App 之间反复横跳
+     * （游戏 ↔ 小窗里的番茄小说）。每一次都像一次「刚换了 App」，
+     * 旧代码于是每次都重判一遍，把「切窗口」当成「跳转」。
+     *
+     * 判据：2 秒内出现过 A → B → A 的往返（A、B 都不是桌面）。
+     * 真实的广告跳转是**单向**的（A → 广告落地页，然后停在那儿），
+     * 不会在两秒内自己跳回来，所以这条判据不会挡住该拦的广告。
+     */
+    const val FLIP_WINDOW_MS = 2_000L
+
+    /** 一次前台采样：谁、什么时候 */
+    data class ForegroundSample(val pkg: String, val at: Long)
+
+    /**
+     * 是否处于多窗口 / 小窗场景。
+     *
+     * 只要最近 [FLIP_WINDOW_MS] 内出现过 A → B → A 的往返，就判定为
+     * 「两块界面同时可见」，此时一律不参与防跳转判定。
+     *
+     * 为什么宁可漏拦也要这样判：
+     * 小窗场景下用户是在**同时用两个 App**，任何一次「弹回去」都会
+     * 打断可见界面上的操作（实测就是番茄小说的阅读页被退成书架，
+     * 读者连看到第几章都丢了）。漏拦的代价是广告多显示两秒，
+     * 误拦的代价是用户正在看的内容消失——不对等。
+     *
+     * @param recent 最近的前台采样，按时间顺序（旧 → 新）
+     * @param now 当前时刻（uptimeMillis）
+     */
+    fun isMultiWindow(recent: List<ForegroundSample>, now: Long): Boolean {
+        if (recent.size < 3) return false
+        val inWindow = recent.filter { now - it.at <= FLIP_WINDOW_MS }
+        if (inWindow.size < 3) return false
+        for (i in 2 until inWindow.size) {
+            val a = inWindow[i - 2].pkg
+            val b = inWindow[i - 1].pkg
+            val c = inWindow[i].pkg
+            if (a.isNotEmpty() && b.isNotEmpty() && a == c && a != b) return true
+        }
+        return false
+    }
+
     /** 动作 */
     enum class Action {
         /** 该弹回去 */

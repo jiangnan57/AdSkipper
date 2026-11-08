@@ -481,4 +481,80 @@ class GuardDecisionTest {
         assertTrue("原因里要能看到来源和耗时，方便排查", v.reason.contains(wakeup))
         assertTrue(v.reason.contains("5000"))
     }
+
+    // ================================================================
+    // 九、多窗口 / 小窗（v1.3.5）
+    // ================================================================
+    //
+    // 真实投诉：游戏全屏 + 番茄小说悬浮小窗，番茄从书页（ReaderActivity）
+    // 退回书架（MainFragmentActivity），阅读进度丢失。
+    // 小窗场景下前台包名在两个 App 之间反复横跳，旧代码每次都当「换了 App」判定。
+
+    private fun samples(vararg pairs: Pair<String, Long>) =
+        pairs.map { GuardDecision.ForegroundSample(it.first, it.second) }
+
+    @Test
+    fun 小窗里两个应用来回切换要识别成多窗口() {
+        // 原神 ↔ 番茄小窗，2 秒内往返
+        val s = samples(
+            "com.miHoYo.Yuanshen" to 1_000L,
+            "com.dragon.read" to 1_200L,
+            "com.miHoYo.Yuanshen" to 1_500L
+        )
+        assertTrue("A→B→A 就是两块界面同时可见", GuardDecision.isMultiWindow(s, 1_500L))
+    }
+
+    @Test
+    fun 真实的单向广告跳转不能被当成多窗口() {
+        // 摇一摇：WakeUp → 淘宝，然后停在那儿，不会自己跳回来
+        val s = samples(
+            "com.taobao.taobao" to 1_000L,
+            "com.taobao.taobao" to 1_200L,
+            "com.taobao.taobao" to 1_500L
+        )
+        assertFalse("单向跳转不是多窗口，该拦的还得拦", GuardDecision.isMultiWindow(s, 1_500L))
+    }
+
+    @Test
+    fun 两次往返间隔太久不算多窗口() {
+        // 用户 5 秒前从 A 切到 B，现在又切回 A —— 这是正常来回用，不是小窗
+        val s = samples(
+            "com.miHoYo.Yuanshen" to 1_000L,
+            "com.dragon.read" to 5_000L,
+            "com.miHoYo.Yuanshen" to 5_200L
+        )
+        // 第一条已超出 2 秒窗口，窗口内只有 B→A 两条，不成往返
+        assertFalse(GuardDecision.isMultiWindow(s, 5_200L))
+    }
+
+    @Test
+    fun 采样太少不能判多窗口() {
+        assertFalse(GuardDecision.isMultiWindow(emptyList(), 1_000L))
+        assertFalse(
+            GuardDecision.isMultiWindow(samples("a" to 1_000L), 1_000L)
+        )
+        assertFalse(
+            GuardDecision.isMultiWindow(
+                samples("a" to 1_000L, "b" to 1_100L),
+                1_100L
+            )
+        )
+    }
+
+    @Test
+    fun 四次往返也要能识别() {
+        val s = samples(
+            "game" to 1_000L,
+            "com.dragon.read" to 1_100L,
+            "game" to 1_200L,
+            "com.dragon.read" to 1_300L
+        )
+        assertTrue(GuardDecision.isMultiWindow(s, 1_300L))
+    }
+
+    @Test
+    fun 空包名不能参与往返判断() {
+        val s = samples("" to 1_000L, "a" to 1_100L, "" to 1_200L)
+        assertFalse("空包名说明事件还没稳定，不能据此判定", GuardDecision.isMultiWindow(s, 1_200L))
+    }
 }

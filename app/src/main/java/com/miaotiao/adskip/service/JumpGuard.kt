@@ -136,6 +136,19 @@ object JumpGuard {
     /** 弹回来源 App 的有效期：15 秒 */
     private const val RESTORE_TTL_MS = 15_000L
 
+    /**
+     * 最近的前台采样，用来识别多窗口 / 小窗场景。
+     *
+     * 小窗（自由窗口、分屏、游戏悬浮窗）下两块界面同时可见，前台包名会在
+     * 两个 App 之间反复横跳。旧代码把每一次横跳都当成「换了 App」去判定，
+     * 于是「番茄小说在游戏小窗里看」这种正常用法会被反复误判。
+     * 判据见 [GuardDecision.isMultiWindow]。
+     */
+    private val flipHistory = ArrayDeque<GuardDecision.ForegroundSample>()
+
+    /** 多窗口日志节流：这类场景会连续刷几十条，只记第一条 */
+    private var lastMultiWindowLogAt = 0L
+
     private var launcherPkg: String? = null
 
     /** 拦截名单缓存，避免每次事件都重新解析字符串 */
@@ -176,6 +189,26 @@ object JumpGuard {
                 "AdSkip",
                 "guard skip pkg=$pkg 同一应用内切换，不参与跳转判定"
             )
+            return
+        }
+
+        // ---- 多窗口 / 小窗：两块界面同时可见 ----
+        //
+        // 小窗里看小说、分屏看视频时，前台包名会在两个 App 之间反复横跳，
+        // 每次都会被算成「换了 App」。这时如果继续判定，就会出现
+        // 「小窗里的番茄小说从书页被打回书架」这种事故
+        // （用户正在看的内容连同阅读进度一起消失）。
+        //
+        // 所以检测到 A→B→A 的往返就整体退出判定，什么都不动。
+        // 漏拦的代价是广告多显示两秒，误拦的代价是用户正在看的内容没了。
+        flipHistory.addLast(GuardDecision.ForegroundSample(pkg, now))
+        while (flipHistory.size > 8) flipHistory.removeFirst()
+        if (GuardDecision.isMultiWindow(flipHistory.toList(), now)) {
+            if (now - lastMultiWindowLogAt > 3_000L) {
+                lastMultiWindowLogAt = now
+                android.util.Log.d("AdSkip", "guard multi-window pkg=$pkg 多窗口/小窗，跳过判定")
+                SkipLog.add("多窗口/小窗：不参与跳转判定")
+            }
             return
         }
 
@@ -337,6 +370,10 @@ object JumpGuard {
         lastRealPkg = null
         restoringPkg = null
         restoringAt = 0L
+        // 回到桌面 = 已经离开多窗口/小窗，历史清零，否则下次打开 App
+        // 会被上一轮的往返记录误判成「还在多窗口里」而漏拦开屏广告。
+        flipHistory.clear()
+        lastMultiWindowLogAt = 0L
     }
 
     private fun isStore(pkg: String): Boolean = AppLists.isStore(pkg)
