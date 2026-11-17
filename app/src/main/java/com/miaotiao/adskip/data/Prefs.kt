@@ -57,6 +57,38 @@ object Prefs {
         get() = sp?.getBoolean("auto_learn", false) ?: false
         set(value) = setBool("auto_learn", value)
 
+    /**
+     * 失联自愈：无障碍授权还在、服务却连不上时，重启进程让系统重新绑定。
+     *
+     * 默认开。只在「连续几分钟都连不上」时才动手，平时完全不影响。
+     */
+    var autoHeal: Boolean
+        get() = sp?.getBoolean("auto_heal", true) ?: true
+        set(value) = setBool("auto_heal", value)
+
+    /** 上次自愈的时间点（elapsedRealtime，跨进程重启有效），用于冷却 */
+    var lastHealAt: Long
+        get() = sp?.getLong("last_heal_at", 0L) ?: 0L
+        // 必须 commit 而不是 apply：写完这一行就要杀进程，
+        // apply 是异步落盘，进程一死就丢了，冷却失效会变成反复重启。
+        set(value) {
+            sp?.edit()?.putLong("last_heal_at", value)?.commit()
+        }
+
+    /**
+     * 定时重启间隔（小时）。0 表示关闭。
+     *
+     * 为什么需要它：进程连续跑几天之后，节点回收、点击记录表、规则缓存这些
+     * 内存状态会一点点累积，表现是「跳过越来越慢、甚至干脆不跳了」。
+     * 重启一次进程（约 2 秒）就全部归零，比逐项去修省事得多。
+     *
+     * 6 小时是折中：一天最多重启两三次，用户几乎察觉不到；
+     * 又能保证「用久了变慢」不会真的拖到用户发现。
+     */
+    var restartHours: Int
+        get() = sp?.getInt("restart_hours", 6) ?: 6
+        set(value) = setInt("restart_hours", value)
+
     // ------------------------------------------------------------------ 规则来源
 
     /** 远程规则地址，为空表示不使用 */
@@ -122,6 +154,12 @@ object Prefs {
     private fun setString(key: String, value: String) {
         val editor = sp?.edit() ?: return
         editor.putString(key, value)
+        editor.apply()
+    }
+
+    private fun setInt(key: String, value: Int) {
+        val editor = sp?.edit() ?: return
+        editor.putInt(key, value)
         editor.apply()
     }
 

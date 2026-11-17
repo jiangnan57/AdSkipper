@@ -151,6 +151,9 @@ class SkipAccessibilityService : AccessibilityService() {
         /** 事件通道「活着」的判定窗口：这段时间内收到过事件就不急着轮询 */
         private const val EVENT_ALIVE_MS = 5_000L
 
+        /** 连续多久拿不到活动窗口就认定服务已哑（见 noteRootFail） */
+        private const val ROOT_FAIL_MS = 60_000L
+
         /** 事件通道正常时的轮询间隔（只做兜底，尽量省电） */
         private const val POLL_SLOW_MS = 4_000L
 
@@ -330,6 +333,17 @@ class SkipAccessibilityService : AccessibilityService() {
         private set
 
     /**
+     * 第一次「拿不到活动窗口」的时间点，0 表示当前正常。
+     *
+     * 为什么需要它：`rootInActiveWindow` 返回 null 时，事件通道、轮询、扫描
+     * 三条链会**一起静默**——进程活着、无障碍也 bound 着，但什么都发现不了。
+     * 用户看到的就是「无障碍明明开着，一个广告都不跳」。
+     * 而 KeepAliveService 的 `instance != null` 判据恰好会把它当成健康状态，
+     * 所以必须由服务自己补一个反面信号（见 noteRootFail）。
+     */
+    private var rootFailSince = 0L
+
+    /**
      * 主动轮询：事件通道不可用时靠它发现「换应用了」。
      *
      * 两个线程上的讲究（这里踩过坑）：
@@ -352,8 +366,17 @@ class SkipAccessibilityService : AccessibilityService() {
             maybeShowGhost()
             val h = if (forceMainThread) main else scanHandler ?: return
             h.post {
-                val pkg = runCatching { activePackage() }.getOrNull() ?: return@post
-                main.post { runCatching { handlePolled(pkg) } }
+                val pkg = runCatching { activePackage() }.getOrNull()
+                if (pkg == null) {
+                    // 拿不到活动窗口：不能只是悄悄 return。
+                    // 这一条如果不统计，「服务已经哑了」就永远没人发现。
+                    main.post { runCatching { noteRootFail() } }
+                    return@post
+                }
+                main.post {
+                    rootFailSince = 0L
+                    runCatching { handlePolled(pkg) }
+                }
             }
         }
     }
@@ -832,6 +855,37 @@ class SkipAccessibilityService : AccessibilityService() {
         val p = active.packageName?.toString()
         Access.recycle(active)
         return p
+    }
+
+    /**
+     * 连续拿不到活动窗口 —— 服务已经哑了。
+     *
+     * 失效链条：HyperOS 冻结 / 解冻之后，系统会停止把窗口给无障碍，
+     * `rootInActiveWindow` 开始一直返回 null。此时：
+     *   · 事件通道没事件可派发；
+     *   · 轮询拿不到前台包名；
+     *   · 扫描器 pickRoot 也返回 null（日志里那条「取不到 XXX 的界面」）。
+     * 三条链同时断，界面上却一切正常（无障碍显示已开启），用户完全无从判断。
+     *
+     * 判据用「持续时长」而不是「次数」：轮询间隔会在 700ms 和 4000ms 之间切换，
+     * 按次数算会让阈值随场景漂移。持续 60 秒拿不到任何窗口，不可能是转场动画。
+     *
+     * 恢复动作交给 KeepAliveService 统一执行（它管着自愈冷却和日志）。
+     */
+    private fun noteRootFail() {
+        if (!Prefs.masterEnabled) return
+        val now = SystemClock.elapsedRealtime()
+        if (rootFailSince == 0L) {
+            rootFailSince = now
+            return
+        }
+        val silent = now - rootFailSince
+        if (silent < ROOT_FAIL_MS) return
+        // 先重置，避免在杀进程前的 500ms 里被重复触发
+        rootFailSince = now
+        Log.w(TAG, "rootInActiveWindow null for ${silent}ms, service looks deaf")
+        SkipLog.add("连续 ${silent / 1000} 秒取不到任何界面，自动重启恢复")
+        KeepAliveService.requestHeal(this)
     }
 
     private fun screenOn(): Boolean {

@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import com.miaotiao.adskip.App
 import com.miaotiao.adskip.R
 import com.miaotiao.adskip.data.Prefs
 import com.miaotiao.adskip.ui.MainActivity
@@ -52,8 +53,49 @@ class KeepAliveService : Service() {
         override fun run() {
             runCatching { checkFrozen() }
             runCatching { checkAndNotify() }
+            runCatching { checkLongRun() }
             handler.postDelayed(this, checkIntervalMs)
         }
+    }
+
+    /**
+     * 定时重启：连续跑够时长就重启进程，把内存里累积的状态全部清掉。
+     *
+     * 用户报的现象是「用久了跳过变慢、甚至干脆不跳」。这类慢性退化没有单一
+     * 断点，而是进程内一堆状态在累积：节点引用、点击记录表、规则解析结果、
+     * 日志队列……逐项去查太贵，重启一次（约 2 秒）全部归零，性价比最高。
+     *
+     * 和 [trySelfHeal] 的分工：
+     *   · 定时重启是**计划性**的，不管有没有病都做，治「慢性累积」；
+     *   · 症状自愈是**应急**的，只在确认失联时才做，治「急性失效」。
+     * 两者共用 lastHealAt 冷却，避免同一时间各杀一次。
+     *
+     * 用 elapsedRealtime 而不是 uptime：它含深度睡眠，手机放一夜也算运行时长。
+     * 这正是想要的——休眠期间进程同样在老化，不该因为没亮屏就不算数。
+     */
+    private fun checkLongRun() {
+        val hours = Prefs.restartHours
+        if (hours <= 0) return
+        val start = App.processStartAt
+        if (start <= 0L) return
+        val ran = android.os.SystemClock.elapsedRealtime() - start
+        if (ran < hours * 60L * 60_000L) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val last = Prefs.lastHealAt
+        // 兜底冷却：正常情况重启后 processStartAt 归零、不会连续触发，
+        // 但万一「杀不掉 / 系统立刻拉起」就靠它拦住重启风暴。
+        if (last > 0L && now - last < HEAL_COOLDOWN_MS) return
+        Prefs.lastHealAt = now
+        SkipLog.add("已连续运行 ${ran / 3_600_000} 小时，按计划重启清空内存状态")
+        Log.w(TAG, "scheduled restart, ran ${ran / 60_000} min")
+        // 顺手清磁盘缓存。规则和记录都在 filesDir，不受影响。
+        runCatching {
+            cacheDir.listFiles()?.forEach { f -> runCatching { f.deleteRecursively() } }
+        }
+        handler.postDelayed(
+            { android.os.Process.killProcess(android.os.Process.myPid()) },
+            500L
+        )
     }
 
     /**
@@ -131,6 +173,7 @@ class KeepAliveService : Service() {
                 SkipLog.add("无障碍已授权但服务未连接：关掉开关再打开一次，并检查省电策略")
                 Log.w(TAG, "accessibility enabled but service not bound")
             }
+            trySelfHeal()
             return
         }
         unconnectedTicks = 0
@@ -141,6 +184,35 @@ class KeepAliveService : Service() {
                 .notify(NOTIF_WARN_ID, buildWarningNotification())
         }
         Log.w(TAG, "accessibility service lost (force-stop?), user notified")
+    }
+
+    /**
+     * 失联自愈：重启进程，让系统重新绑定无障碍服务。
+     *
+     * 为什么不做「定时重启」：
+     *   · 冻结期间自检的 Handler 本身也被挂起，定时器不跑——最需要它的场景它偏偏不工作；
+     *   · 不管有没有病都重启，重启那一两秒正在播的广告就漏了，纯亏。
+     *
+     * 改成症状触发：只有「授权还在、服务却连续 3 轮（约 3 分钟）连不上」才动手。
+     * 这个状态就是日志里「无障碍明明开着，一个广告都不跳」的形态，平时不会出现。
+     *
+     * 冷却 15 分钟：重启过一次还是连不上，说明不是进程状态的问题（多半是
+     * 系统把无障碍彻底禁用了），再杀进程只会变成重启循环，此时改为提示用户。
+     */
+    private fun trySelfHeal() {
+        if (!Prefs.autoHeal) return
+        if (unconnectedTicks < HEAL_AFTER_TICKS) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val last = Prefs.lastHealAt
+        if (last > 0L && now - last < HEAL_COOLDOWN_MS) {
+            // 只提示一次，别每轮刷屏
+            if (unconnectedTicks == HEAL_AFTER_TICKS + 2) {
+                SkipLog.add("自动恢复无效，请手动关掉无障碍开关再打开")
+            }
+            return
+        }
+        SkipLog.add("无障碍失联约 ${unconnectedTicks} 分钟，自动重启进程恢复")
+        requestHeal(this)
     }
 
     private fun createChannel() {
@@ -219,6 +291,10 @@ class KeepAliveService : Service() {
 
     companion object {
         private const val TAG = "AdSkip"
+        /** 连续几轮「授权在、服务未连」才自愈（每轮 60 秒） */
+        private const val HEAL_AFTER_TICKS = 3
+        /** 自愈冷却：15 分钟内最多重启一次，避免重启循环 */
+        private const val HEAL_COOLDOWN_MS = 15 * 60_000L
         /** 改过重要度必须换 channel id，Android 不允许原地修改已建好的渠道 */
         private const val CHANNEL_ID = "adskip_keep_alive_v2"
         private const val CHANNEL_WARN_ID = "adskip_warn"
@@ -234,6 +310,31 @@ class KeepAliveService : Service() {
                     ctx.startService(intent)
                 }
             }.onFailure { Log.w(TAG, "start keep alive failed: ${it.message}") }
+        }
+
+        /**
+         * 由无障碍服务主动请求自愈。
+         *
+         * 服务比自检更早发现问题：它一旦连续 60 秒拿不到活动窗口，就知道自己
+         * 哑了（见 SkipAccessibilityService.noteRootFail），不必等自检每分钟
+         * 一次的轮询、也不用连续 3 轮才动手。
+         *
+         * 冷却在这里统一判断：两条触发路径（自检 / 服务上报）共享同一个
+         * lastHealAt，避免两边各杀一次。
+         */
+        fun requestHeal(ctx: Context) {
+            if (!Prefs.autoHeal) return
+            val now = android.os.SystemClock.elapsedRealtime()
+            val last = Prefs.lastHealAt
+            if (last > 0L && now - last < HEAL_COOLDOWN_MS) {
+                Log.w(TAG, "heal requested but cooling down")
+                return
+            }
+            Prefs.lastHealAt = now // 同步写盘，必须在杀进程之前落地
+            Log.w(TAG, "heal requested by accessibility service")
+            Handler(Looper.getMainLooper()).postDelayed({
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }, 500L)
         }
 
         fun stop(ctx: Context) {

@@ -176,6 +176,22 @@ object JumpGuard {
         }
         if (pkg == service.packageName || pkg == "com.android.systemui") return
 
+        // 系统安装器 / 权限弹窗 / 分享面板 / 文件选择器：当透明层。
+        //
+        // 既不判它、也不把它记成来源。用户点开一个 APK、同意一次权限、
+        // 选一个保存位置，都是明确意图，被弹回去轻则操作丢失、重则安装中断。
+        //
+        // 必须放在 `lastRealPkg = pkg` 之前：让安装器「不存在」，
+        // 于是从安装器回到 MT 管理器时 pkg 等于原值，走下面的「同一应用内切换」，
+        // 连一次判定都不会发生。
+        if (AppLists.isSystemUi(pkg)) {
+            android.util.Log.d(
+                "AdSkip",
+                "guard skip pkg=$pkg 系统 UI 容器（安装器/权限/分享/选文件），不参与跳转判定"
+            )
+            return
+        }
+
         // 同一个 App 内部切 Activity（个人主页、详情页、评论区）：
         // 包名没变 = 不是一次跳转，压根不该进判定。
         // 「番茄小说打开个人主页时回退」就是被这一条挡住的。

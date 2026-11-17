@@ -67,12 +67,62 @@ object AppLists {
         "com.bbk.appstore",
         "com.tencent.android.qqdownloader",
         "com.qihoo.appstore",
-        "com.wandoujia.phoenix2",
-        "com.miui.packageinstaller"
+        "com.wandoujia.phoenix2"
+        // 这里**不能**放 com.miui.packageinstaller。
+        //
+        // 它曾被当成「小米应用商店」写在这里，而 STORES 是唯一「不限来源」的
+        // 拦截目标——于是用 MT 管理器 / 文件管理器点开一个 APK，系统安装界面
+        // 一弹出来就被判成广告跳转、立刻按返回弹回去，用户装不了软件。
+        //
+        // 安装器和商店是两回事：商店（com.xiaomi.market）从 App 里被拉起九成是
+        // 误触广告，该拦；安装器只会在用户自己点 APK 或点「更新」时出现，
+        // 是明确的用户意图，永远不该拦。见 [SYSTEM_UI]。
     )
 
     fun isStore(pkg: String): Boolean =
         pkg in STORES || STORES.any { pkg.startsWith("$it.") }
+
+    /**
+     * 系统 UI 容器：安装器 / 权限弹窗 / 分享面板 / 文件选择器 / 系统设置。
+     *
+     * 这些都是「用户主动触发的系统页面」，两种角色都必须豁免：
+     *
+     *   · 作为**目的地**：绝对不能按返回。装 APK、授权限、选文件时被弹回去，
+     *     轻则操作丢失，重则安装中断。
+     *   · 作为**来源**：也不参与判定，否则从安装器返回 App 会被当成一次跳转。
+     *
+     * 为什么单独一份名单，而不是复用 NEVER_SCAN：
+     * NEVER_SCAN 只作用于「扫描链」，JumpGuard 的判定链根本读不到它。
+     * 名单只在一个环节生效，这个项目已经因此栽过三次（v1.3.4 的 isBlocked
+     * 让被拦包当不了来源、contentPage 统计放在规则命中之后、以及这次的
+     * 安装器被写进 STORES）。所以统一在这里定义，两条链共用。
+     *
+     * 注意**不要**按 `FLAG_SYSTEM` 泛判「系统应用一律豁免」——
+     * com.miui.systemAdSolution 也是系统应用，而它恰恰是最该拦的
+     * （日志里它拉起应用商店那条拦截是对的）。
+     */
+    val SYSTEM_UI = setOf(
+        // 安装器（各家 ROM 的包名都不一样，常见几家都列上）
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.miui.packageinstaller",
+        "com.oppo.packageinstaller",
+        "com.vivo.packageinstaller",
+        // 权限授予弹窗（Android 11+ 几乎都在 permissioncontroller 里）
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.lbe.security.miui",
+        "com.miui.securitycenter",
+        // 分享面板 / 文件选择器
+        "com.android.intentresolver",
+        "com.android.documentsui",
+        "com.google.android.documentsui",
+        // 系统设置
+        "com.android.settings"
+    )
+
+    fun isSystemUi(pkg: String): Boolean =
+        pkg in SYSTEM_UI || SYSTEM_UI.any { pkg.startsWith("$it.") }
 
     /**
      * 「用户自己点开的 App」。
