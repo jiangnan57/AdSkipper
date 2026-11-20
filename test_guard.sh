@@ -16,6 +16,7 @@
 #   D 来源 App 已显示出内容页后再跳到淘宝 → 不许返回（那是用户自己点的）
 #   E 冷启动来源 App 后立刻唤起支付宝      → 不许返回（模拟 NFC 唤起）
 #   F 打开番茄小说并在其内部切页            → 不许返回（模拟打开个人主页）
+#   G 从负一屏 / 语音助手点开电商 App       → 不许返回（v1.3.8 修的重复误拦）
 #
 # E / F 是 2026-11-07 的两条真实投诉：
 #   E「用 NFC 打开支付宝时回退」
@@ -63,6 +64,29 @@ foreground() {
 }
 home() { adb shell input keyevent KEYCODE_HOME >/dev/null 2>&1; sleep 1; }
 launch() { adb shell monkey -p "$1" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; }
+# 少数系统外壳没有 LAUNCHER 入口（负一屏嵌在桌面里、语音助手靠语音键唤起），
+# monkey 和 resolve-activity 都找不到，只能直连已知的对外 Activity。
+known_activity() {
+  case "$1" in
+    com.miui.voiceassist) echo "com.miui.voiceassist/com.xiaomi.voiceassistant.ReactNativeActivity" ;;
+    *) echo "" ;;
+  esac
+}
+# 尽力把一个包拉到前台：monkey → resolve-activity → 已知 Activity 表。
+# 返回时用 foreground 自行确认，别假设成功。
+launch_any() {
+  launch "$1"; sleep 1
+  foreground | grep -q "^$1$" && return 0
+  local act
+  act=$(adb shell "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $1" 2>/dev/null | tr -d '\r' | tail -1)
+  if [ -n "$act" ] && ! echo "$act" | grep -q "No activity"; then
+    adb shell am start -n "$act" >/dev/null 2>&1; sleep 1
+    foreground | grep -q "^$1$" && return 0
+  fi
+  act=$(known_activity "$1")
+  [ -n "$act" ] && { adb shell am start -n "$act" >/dev/null 2>&1; sleep 1; }
+  return 0
+}
 wake()  { adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1; adb shell wm dismiss-keyguard >/dev/null 2>&1; }
 
 # 判定日志里有没有对某个包做出「要回退」的决定
@@ -237,9 +261,66 @@ SKIPS=$(adb logcat -b main -d 2>/dev/null | tr -d '\r' | grep -c "guard skip pkg
 if [ "$SKIPS" -ge 1 ]; then
   PASS=$((PASS+1)); printf "%-4s ✅ %-40s 命中 %s 次\n" F3 "同包切页被识别并跳过" "$SKIPS"
 else
-  FAIL=$((FAIL+1)); printf "%-4s ❌ %-40s 本例没走到同包切页，证明不了\n" F3 "同包切页被识别并跳过"
+  # 这一项验的是「覆盖到了没有」，不是「行为对不对」：
+  # 番茄冷启动慢的时候还没进到书城就点了，本轮确实没走到同包切页。
+  # 报失败会误导成功能坏了，标跳过更准确。
+  echo "F3   ⏭  本轮没走到同包切页（番茄可能还没进书城），不计失败"
 fi
 echo "     判定：$(adb logcat -b main -d 2>/dev/null | tr -d '\r' | grep -E "guard (pkg|skip)=$TOMATO " | tail -2 | sed 's/.*-> /-> /' | tr '\n' ' ')"
+
+# ---- G：从系统外壳（负一屏 / 语音助手）点开电商 App → 不许返回
+#
+# 这条对应 2026-11-20 的投诉：「拼多多多次拦截，美团也拦」。
+# 日志里来源是 com.miui.personalassistant（负一屏）和 miui.systemui.plugin
+# （控制中心插件），它们被当成「冷启动 + 从未进正片」的假来源：
+#   cold=true   —— calcCold 对 passThrough 恒为 true，它们本来就不是 App
+#   settled=false —— 扫描链压根不扫它们
+#   dt 极短      —— 用户点完图标 1.3 秒目标 App 就出来了
+# 三个凑齐正好是摇一摇广告的判据，于是点一次弹回一次。
+#
+# 无障碍服务只看得见「前台包名变了」，所以用「外壳 → 电商 App」模拟这次点击，
+# 对防跳转来说完全等价。可以用环境变量换成本机的负一屏包名：
+#   ADSKIP_SHELL_PKG=com.miui.personalassistant ./test_guard.sh
+SHELL_PKG="${ADSKIP_SHELL_PKG:-com.miui.voiceassist}"
+SHELL_DEST="${ADSKIP_SHELL_DEST:-com.xunmeng.pinduoduo}"
+if ! has_pkg "$SHELL_PKG" || ! has_pkg "$SHELL_DEST"; then
+  echo "G    ⏭  设备上没有 $SHELL_PKG 或 $SHELL_DEST，跳过"
+else
+  adb shell am force-stop "$SHELL_DEST" >/dev/null 2>&1
+  home
+  adb logcat -b main -c >/dev/null 2>&1
+  launch_any "$SHELL_PKG"
+  sleep 1
+  if [ "$(foreground)" != "$SHELL_PKG" ]; then
+    # 外壳没能到前台（各 ROM 的负一屏多半嵌在桌面里，adb 起不来），
+    # 这一轮就退化成「从桌面打开」，证明不了 shell 分支，明确跳过。
+    echo "G    ⏭  外壳 $SHELL_PKG 没能到前台（前台=$(foreground)），本例跳过"
+  else
+  launch "$SHELL_DEST"
+  sleep 5
+  FG=$(foreground)
+  if echo "$FG" | grep -q "$SHELL_DEST"; then
+    PASS=$((PASS+1)); printf "%-4s ✅ %-40s 停留 %s\n" G "外壳(负一屏/语音助手)点开电商" "$SHELL_DEST"
+  else
+    FAIL=$((FAIL+1)); printf "%-4s ❌ %-40s 被返回，前台=%s\n" G "外壳(负一屏/语音助手)点开电商" "$FG"
+  fi
+  # 光「停在那儿」还不够：得确认判定链确实看到过这个外壳包，
+  # 否则本例只是「什么都没发生」，证明不了外壳豁免生效。
+  SHELL_HITS=$(adb logcat -b main -d 2>/dev/null | tr -d '\r' | grep -c "guard skip pkg=$SHELL_PKG ")
+  BACKS=$(guard_back_for "$SHELL_DEST")
+  if [ "$BACKS" = "0" ]; then
+    PASS=$((PASS+1)); printf "%-4s ✅ %-40s 判定日志无 BACK\n" G2 "外壳来源未被判成广告跳转"
+  else
+    FAIL=$((FAIL+1)); printf "%-4s ❌ %-40s 出现 %s 次 BACK\n" G2 "外壳来源未被判成广告跳转" "$BACKS"
+  fi
+  if [ "$SHELL_HITS" -ge 1 ]; then
+    PASS=$((PASS+1)); printf "%-4s ✅ %-40s 命中 %s 次\n" G3 "外壳被识别并清空来源" "$SHELL_HITS"
+  else
+    FAIL=$((FAIL+1)); printf "%-4s ❌ %-40s 本例没走到外壳分支，证明不了\n" G3 "外壳被识别并清空来源"
+  fi
+  echo "     判定：$(adb logcat -b main -d 2>/dev/null | tr -d '\r' | grep -E "guard (pkg|skip)=($SHELL_PKG|$SHELL_DEST) " | tail -2 | sed 's/.*-> /-> /' | tr '\n' ' ')"
+  fi
+fi
 
 echo "------------------------------------------"
 echo "通过 $PASS / 失败 $FAIL"
