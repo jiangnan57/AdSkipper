@@ -84,4 +84,76 @@ class AppListsTest {
         val overlap = AppLists.SYSTEM_UI.filter { AppLists.isStore(it) }
         assertTrue("SYSTEM_UI 与 STORES 不允许重叠，实际重叠：$overlap", overlap.isEmpty())
     }
+
+    // ================================================================
+    // 系统外壳（桌面 / 负一屏 / 控制中心插件 / 全局搜索）
+    //
+    // v1.3.8 的 bug：这批包在扫描链的 NEVER_SCAN 里有，但 JumpGuard 的判定链
+    // 读不到，于是负一屏成了「冷启动 + 从未进正片」的完美假来源，
+    // 用户从负一屏点开拼多多 / 美团，每点一次被弹回一次。
+    // ================================================================
+
+    @Test
+    fun 各家负一屏都必须被识别成系统外壳() {
+        listOf(
+            "com.miui.personalassistant", // 小米「智能助理」
+            "com.huawei.intelligent", // 华为「智慧助手·今天」
+            "com.coloros.assistantscreen", // OPPO 负一屏
+            "com.samsung.android.app.spage", // 三星 Samsung Free
+            "com.google.android.googlequicksearchbox" // 原生 Discover
+        ).forEach {
+            assertTrue("$it 是负一屏，不是 App，不能当跳转来源", AppLists.isShell(it))
+        }
+    }
+
+    @Test
+    fun 桌面与控制中心插件也算系统外壳() {
+        listOf(
+            "com.miui.home",
+            "com.android.launcher3",
+            "com.oppo.launcher",
+            "com.bbk.launcher2",
+            "miui.systemui.plugin", // 日志里的 128ms 来源
+            "com.miui.voiceassist" // 小爱同学：实测能成为跳转来源
+        ).forEach {
+            assertTrue("$it 是系统外壳", AppLists.isShell(it))
+        }
+    }
+
+    @Test
+    fun 真实应用绝不能被当成系统外壳() {
+        // 这一条比上面几条都重要：判错一次就是「用户点开拼多多被当成桌面」，
+        // 于是所有拦截全部失效。
+        listOf(
+            "com.xunmeng.pinduoduo",
+            "com.sankuai.meituan",
+            "com.taobao.taobao",
+            "com.dragon.read",
+            "com.tencent.mm",
+            "com.miui.gallery",
+            "com.miui.video",
+            "com.miui.player"
+        ).forEach {
+            assertFalse("$it 是真实 App，不能被当成系统外壳", AppLists.isShell(it))
+        }
+    }
+
+    @Test
+    fun 系统外壳不当来源也不能当拦截目标() {
+        // 外壳永远不会是「广告落地页」，否则从负一屏跳负一屏会被拦。
+        AppLists.SHELL.forEach {
+            assertFalse("$it 不该出现在落地页名单", AppLists.isAdLanding(it))
+            assertFalse("$it 不该出现在内容 App 名单", AppLists.isContentApp(it))
+        }
+    }
+
+    @Test
+    fun 安装器属于系统UI但不属于外壳() {
+        // 两者的处理方式必须不同：安装器是「透明层」（保留来源上下文），
+        // 外壳是「桌面」（清空来源上下文）。混在一起会让装完 APK
+        // 回到 MT 管理器时被当成一次全新跳转。
+        installers.forEach {
+            assertFalse("$it 只是覆盖层，不是桌面", AppLists.isShell(it))
+        }
+    }
 }

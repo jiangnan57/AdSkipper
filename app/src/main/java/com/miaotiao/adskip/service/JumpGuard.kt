@@ -151,6 +151,17 @@ object JumpGuard {
 
     private var launcherPkg: String? = null
 
+    /**
+     * 重复拦截熔断器。
+     *
+     * 1 分钟内同一个目的地被拦到第 3 次，就认定用户确实想进去，
+     * 5 分钟内不再拦它。见 [GuardDecision.RepeatGuard]。
+     *
+     * 刻意不放进 reset()：用户回桌面再点，还是同一个意图，
+     * 熔断该继续有效。
+     */
+    private val repeatGuard = GuardDecision.RepeatGuard()
+
     /** 拦截名单缓存，避免每次事件都重新解析字符串 */
     private var cachedRaw: String? = null
     private var cachedList: List<String> = emptyList()
@@ -175,6 +186,24 @@ object JumpGuard {
             return
         }
         if (pkg == service.packageName || pkg == "com.android.systemui") return
+
+        // 负一屏 / 控制中心插件 / 全局搜索 = 「用户在找 App 的地方」。
+        //
+        // 必须和桌面同样处理（reset 清空来源），不能只当成透明层：
+        // 用户从负一屏点开拼多多，和从桌面点开拼多多是同一件事，
+        // 上一个 App 的上下文早就失效了。
+        //
+        // **这是 v1.3.8 修的那个「拼多多/美团反复被拦」的根因**：
+        // 这批包在扫描链的 NEVER_SCAN 里有，但判定链读不到（第四次的同类错误），
+        // 于是负一屏成了「冷启动 + 从未进正片」的完美假来源，
+        // 用户每点一次就被弹回一次，而且拦完还会把自己重新武装成「仍在开屏」，
+        // 一路自激成日志里那种 5 连拦。
+        if (AppLists.isShell(pkg)) {
+            android.util.Log.d("AdSkip", "guard skip pkg=$pkg 系统外壳（桌面/负一屏/搜索），清空来源")
+            reset()
+            lastRealPkg = pkg
+            return
+        }
 
         // 系统安装器 / 权限弹窗 / 分享面板 / 文件选择器：当透明层。
         //
@@ -279,7 +308,8 @@ object JumpGuard {
             destIsCustom = isCustom,
             destIsUserDriven = destIsUserDriven,
             originIsUserDriven = origin != null && origin in AppLists.USER_DRIVEN,
-            originIsAdProne = origin != null && origin in AppLists.AD_PRONE
+            originIsAdProne = origin != null && origin in AppLists.AD_PRONE,
+            originIsShell = origin != null && AppLists.isShell(origin)
         )
 
         val verdict = GuardDecision.decide(ctx)
@@ -307,6 +337,31 @@ object JumpGuard {
         )
 
         if (!verdict.shouldBack) return
+
+        // ---- 熔断：同一个目的地短时间内被反复拦 = 用户真的想进去 ----
+        //
+        // 这一层是「什么都没算到」时的最后一道保险：各 ROM 的负一屏、
+        // 桌面小组件、语音助手、车机投屏……总有判定链覆盖不到的入口。
+        // 判到错的时候，用户的表现就是「点一次弹回一次」，越点越火。
+        //
+        // 与其逐个案补名单，不如承认「连续三次就是用户意图」。
+        // 漏拦的代价是广告多显示 5 分钟，误拦的代价是用户打不开 App。
+        if (repeatGuard.isMuted(pkg, now)) {
+            android.util.Log.d(
+                "AdSkip",
+                "guard muted pkg=$pkg 熔断中，剩 ${repeatGuard.muteLeftMs(pkg, now) / 1000}s，放行"
+            )
+            return
+        }
+        if (repeatGuard.noteBack(pkg, now)) {
+            android.util.Log.d("AdSkip", "guard mute pkg=$pkg 达到 ${GuardDecision.REPEAT_THRESHOLD} 次，开始熔断")
+            SkipLog.add(
+                "不再拦截 ${pkg.substringAfterLast('.')}：" +
+                    "1 分钟内被拦了 ${GuardDecision.REPEAT_THRESHOLD} 次，判定你确实想进去" +
+                    "（${GuardDecision.REPEAT_MUTE_MS / 60_000} 分钟内放行）"
+            )
+            return
+        }
 
         lastBackAt = now
         // 记下要弹回哪个 App：等它回到前台时重新按冷启动 + 开屏期处理。

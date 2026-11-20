@@ -125,6 +125,109 @@ object AppLists {
         pkg in SYSTEM_UI || SYSTEM_UI.any { pkg.startsWith("$it.") }
 
     /**
+     * 系统外壳：桌面 / 负一屏 / 控制中心插件 / 全局搜索。
+     *
+     * 这些包**不是用户要去的目的地，而是找 App 的地方**。用户在这里点一个图标
+     * 或卡片，等于说「我要打开下面那个 App」——那是最明确的用户意图，
+     * 绝不能被判成「广告跳转然后弹回去」。
+     *
+     * ## 为什么单独一份，不并进 [SYSTEM_UI]
+     *
+     * 两者的处理方式不同，而且必须不同：
+     *
+     *   · [SYSTEM_UI]（安装器/权限弹窗）要当**透明层**——它盖在真实 App 上面，
+     *     下面的 App 还在，不能清空来源上下文，否则装完 APK 回到 MT 管理器
+     *     会被算成一次全新跳转。
+     *   · [SHELL] 要当**桌面**——用户在这里停留时，上一个 App 的上下文
+     *     已经彻底失效了（从负一屏点开拼多多，和从桌面点开拼多多没有区别）。
+     *     所以它必须触发 reset()，让来源变成「未知」，判定直接放过。
+     *
+     * ## 这份名单是怎么来的
+     *
+     * 2026-11-20 用户反馈「拼多多多次拦截、美团也拦」：日志里十几次
+     * `拦截跳转 pinduoduo：像广告跳转（来源 com.miui.personalassistant，
+     * cold=true splash=true）`、`来源 miui.systemui.plugin，128ms`。
+     *
+     * 这两个包早就在扫描链的 NEVER_SCAN 里（不扫它们），但 JumpGuard 的
+     * 判定链根本读不到那份名单——**同一个错误在这个项目里第四次出现**
+     * （前三次见 [STORES] 和 [SYSTEM_UI] 的注释）。于是负一屏成了「来源」：
+     * 它是冷启动（calcCold 对 passThrough 返回 true）、永远不会被扫到内容页
+     * （所以 settled 恒为 false）、用户 1.3 秒后就点开了拼多多（dt 很短）。
+     * 三个条件正好凑齐「来源还在开屏、摇一摇落地」的判据，于是每点一次
+     * 弹回一次，还会把自己重新武装成「仍在开屏」（见 restoringPkg），
+     * 形成自激循环。
+     *
+     * 名单按各家 ROM 的实际包名列，不按 `FLAG_SYSTEM` 泛判——
+     * com.miui.systemAdSolution 也是系统应用，而它恰恰是最该拦的。
+     */
+    val SHELL = setOf(
+        // 小米 / Redmi（HyperOS、MIUI）
+        "com.miui.home",
+        "com.miui.personalassistant", // 负一屏「智能助理」
+        "miui.systemui.plugin", // 控制中心 / 通知中心的插件进程
+        "com.miui.globalsearch",
+        // 语音助手：「打开 XX」是最明确的用户意图。
+        // 实测（2026-11-20）从小爱同学点开拼多多，它会成为跳转来源；
+        // 停留不够 5 秒的话就会命中「冷启动 + 未进正片」→ 弹回。
+        "com.miui.voiceassist",
+        "com.huawei.vassistant",
+        // 原生 / Google
+        "com.android.launcher3",
+        "com.google.android.apps.nexuslauncher",
+        "com.android.quicksearchbox",
+        "com.google.android.googlequicksearchbox", // 负一屏 Discover
+        // 注意：com.android.systemui 不在这里。它是**透明层**（状态栏/导航栏/
+        // 弹窗宿主），不该清空来源上下文，由 JumpGuard 单独 return 处理。
+        // 华为 / 荣耀
+        "com.huawei.android.launcher",
+        "com.hihonor.android.launcher",
+        "com.huawei.intelligent", // 负一屏「智慧助手·今天」
+        // OPPO / 一加 / realme
+        "com.oppo.launcher",
+        "com.oplus.launcher",
+        "com.coloros.assistantscreen", // 负一屏「智慧助手」
+        // vivo / iQOO
+        "com.bbk.launcher2",
+        "com.vivo.assistant", // 负一屏「Jovi」
+        // 三星
+        "com.sec.android.app.launcher",
+        "com.samsung.android.app.spage", // 负一屏「Samsung Free」
+        // 常见第三方桌面
+        "com.teslacoilsw.launcher",
+        "ch.deletescape.lawnchair.plah",
+        "app.lawnchair",
+        // 系统框架自己：日志里出现过「未找到跳过按钮：android」
+        "android"
+    )
+
+    /** 负一屏/桌面的包名特征，覆盖名单里没列到的小众 ROM */
+    private val SHELL_HINTS = listOf(
+        "personalassistant",
+        "assistantscreen",
+        "quicksearchbox",
+        "globalsearch",
+        "systemui.plugin",
+        ".spage",
+        "voiceassist",
+        "vassistant",
+        "bixby",
+        "launcher"
+    )
+
+    /**
+     * 是不是系统外壳（桌面 / 负一屏 / 控制中心插件 / 全局搜索）。
+     *
+     * 命中即「用户在自己找 App」，一律不参与跳转判定。
+     */
+    fun isShell(pkg: String): Boolean {
+        if (pkg in SHELL) return true
+        val lower = pkg.lowercase()
+        // 前缀匹配兜住 "com.miui.home.xxx" 这类子包
+        if (SHELL.any { pkg.startsWith("$it.") }) return true
+        return SHELL_HINTS.any { lower.contains(it) }
+    }
+
+    /**
      * 「用户自己点开的 App」。
      *
      * 这份名单是**双向豁免**：

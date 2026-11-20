@@ -77,6 +77,34 @@ object GuardDecision {
     const val WINDOW_UNWATCHED_MS = 2_500L
 
     /**
+     * 「在来源 App 里待过」的最短时长：500ms。
+     *
+     * 比这更短的时间不可能是「用户打开 App → 开屏广告渲染 → 摇一摇 → 落地」，
+     * 那条链路最快也要 1 秒以上。500ms 以内发生的「跳转」只有一种解释：
+     * **前台包名采样抖了一下**——系统 UI 插件、负一屏卡片、切换动画的中间帧
+     * 被当成了前台 App，紧接着真实 App 出现。
+     *
+     * 日志实证（v1.3.7，2026-11-20）：
+     * `拦截跳转 meituan：像广告跳转（来源 miui.systemui.plugin，128ms）`
+     * ——128 毫秒就"跳"到美团，然后按返回把用户弹回去。
+     *
+     * 所以这类事件直接放过：漏拦一次抖动没有任何代价，
+     * 误拦一次就是用户点开的美团没了。
+     */
+    const val MIN_DWELL_MS = 500L
+
+    /**
+     * 同一个目的地被连续拦截多少次，就认定「用户确实想去」，开始熔断。
+     */
+    const val REPEAT_THRESHOLD = 3
+
+    /** 统计「连续拦截同一目的地」的时间窗：1 分钟 */
+    const val REPEAT_WINDOW_MS = 60_000L
+
+    /** 熔断时长：5 分钟内不再拦这个目的地 */
+    const val REPEAT_MUTE_MS = 300_000L
+
+    /**
      * 两次回退之间的最小间隔，避免连按
      */
     const val BACK_COOLDOWN_MS = 3_000L
@@ -135,6 +163,103 @@ object GuardDecision {
     }
 
     /**
+     * 「重复拦截」熔断器。
+     *
+     * ## 为什么需要它
+     *
+     * 判定逻辑再小心，也总有我没想到的系统入口（各 ROM 的负一屏、
+     * 桌面小组件、车机投屏、语音助手的"打开 XX"……）。这类入口一旦被当成
+     * 广告来源，用户就会陷入「点一次、弹回一次、再点一次、再弹回一次」的地狱。
+     *
+     * 2026-11-20 的真实日志：12:32:56 到 12:33:14 之间，用户点开拼多多
+     * 被连拦 5 次，中间还有 `已从 pinduoduo 退出（该页会吞返回键）`。
+     * 用户当时的原话是「拼多多多次拦截美团拦截」。
+     *
+     * ## 判据
+     *
+     * 1 分钟内同一个目的地被拦到第 [threshold] 次，就认定「用户确实想进去」，
+     * 熔断 [muteMs] 分钟不再拦它。
+     *
+     * ## 为什么宁可放过
+     *
+     * 熔断的代价：一个真广告可能多显示 5 分钟。
+     * 不熔断的代价：用户反复打不开自己要用的 App，直接卸载。
+     * 这个项目一贯的选择是前者。
+     *
+     * 注意熔断状态**不能**被「回到桌面」清掉——它记的是用户意图，
+     * 跨桌面依然有效。进程被杀才会失效，那是可以接受的。
+     */
+    class RepeatGuard(
+        private val threshold: Int = REPEAT_THRESHOLD,
+        private val windowMs: Long = REPEAT_WINDOW_MS,
+        private val muteMs: Long = REPEAT_MUTE_MS
+    ) {
+
+        private var streakPkg: String? = null
+        private var streakStart = 0L
+        private var streakCount = 0
+
+        private var mutedPkg: String? = null
+        private var mutedUntil = 0L
+
+        /** 该目的地此刻是否处于熔断期 */
+        @Synchronized
+        fun isMuted(dest: String, now: Long): Boolean {
+            val muted = mutedPkg ?: return false
+            if (now < mutedUntil && dest == muted) return true
+            // 到期，顺手清掉，免得下次还要再比一遍
+            if (now >= mutedUntil) {
+                mutedPkg = null
+                mutedUntil = 0L
+            }
+            return false
+        }
+
+        /** 熔断还会持续多久（毫秒，0 = 没在熔断） */
+        @Synchronized
+        fun muteLeftMs(dest: String, now: Long): Long {
+            val muted = mutedPkg ?: return 0L
+            if (dest != muted || now >= mutedUntil) return 0L
+            return mutedUntil - now
+        }
+
+        /**
+         * 记一次拦截。
+         *
+         * @return true 表示**这一次刚好触发熔断**，调用方应该记一条日志
+         *   告诉用户「我不再拦这个了」，否则用户会以为软件坏了。
+         */
+        @Synchronized
+        fun noteBack(dest: String, now: Long): Boolean {
+            if (dest != streakPkg || now - streakStart > windowMs) {
+                streakPkg = dest
+                streakStart = now
+                streakCount = 1
+                return false
+            }
+            streakCount++
+            if (streakCount < threshold) return false
+            mutedPkg = dest
+            mutedUntil = now + muteMs
+            // 清掉计数：熔断到期后重新开始数，不能一到期就立刻又熔断一轮
+            streakPkg = null
+            streakStart = 0L
+            streakCount = 0
+            return true
+        }
+
+        /** 单元测试用：清空全部状态 */
+        @Synchronized
+        fun clear() {
+            streakPkg = null
+            streakStart = 0L
+            streakCount = 0
+            mutedPkg = null
+            mutedUntil = 0L
+        }
+    }
+
+    /**
      * 一次前台切换的判定输入。
      *
      * @param destPkg 新前台包名
@@ -167,6 +292,10 @@ object GuardDecision {
      *   （微信/QQ/支付宝/钉钉……）。NFC 唤起支付宝就是这种。
      * @param originIsUserDriven 来源是不是用户主动打开的 App
      * @param originIsAdProne 来源是不是广告高发 App
+     * @param originIsShell 来源是不是系统外壳（桌面 / 负一屏 / 控制中心插件 /
+     *   全局搜索）。这类包**不是 App，是找 App 的地方**，作为来源没有任何
+     *   判定意义——用户从负一屏点开拼多多，和从桌面点开拼多多是同一件事。
+     *   见 AppLists.SHELL。
      */
     data class Context(
         val destPkg: String,
@@ -184,7 +313,8 @@ object GuardDecision {
         val destIsCustom: Boolean,
         val destIsUserDriven: Boolean,
         val originIsUserDriven: Boolean,
-        val originIsAdProne: Boolean
+        val originIsAdProne: Boolean,
+        val originIsShell: Boolean = false
     )
 
     /**
@@ -241,6 +371,23 @@ object GuardDecision {
             return keep("没有来源 App")
         }
 
+        // ③' 来源是系统外壳（桌面 / 负一屏 / 控制中心插件 / 全局搜索）。
+        //
+        //     这类包不是 App，是**用户找 App 的地方**。从这里点开任何东西
+        //     都是明确意图，不能当成广告跳转。
+        //
+        //     v1.3.8 的根因就在这里：负一屏 com.miui.personalassistant 作为来源时，
+        //     它永远「刚冷启动」（calcCold 对 passThrough 返回 true）、
+        //     永远「没进正片」（扫描链压根不扫它）、而用户 1.3 秒后就点开了
+        //     拼多多——三个条件正好凑齐「来源还在开屏、摇一摇落地」的判据。
+        //     日志里 `cold=true splash=true` 连拦 5 次就是这么来的。
+        //
+        //     JumpGuard 已经在入口处把这类包 reset 掉了，这里是第二道防线，
+        //     防止以后有别的调用点绕过那一层。
+        if (c.originIsShell) {
+            return keep("来源是桌面/负一屏，不是真实 App")
+        }
+
         // ④ 来源是用户主动操作的 App（微信里点分享链接、QQ 里打开小程序）。
         //    那些跳转本来就是用户点的。
         if (c.originIsUserDriven) {
@@ -257,6 +404,13 @@ object GuardDecision {
         // ⑥ 时间未知（刚开机、进程刚起、事件乱序）→ 不猜。
         if (c.dtMs < 0L) {
             return keep("时间未知")
+        }
+
+        // ⑥' 在来源 App 里只待了几百毫秒 = 前台包名抖动，不是一次真实跳转。
+        //    见 [MIN_DWELL_MS]：摇一摇广告不可能这么快落地，
+        //    这种事件多半是系统 UI 插件/切换动画的中间帧被当成了来源。
+        if (c.dtMs < MIN_DWELL_MS) {
+            return keep("在来源 App 停留过短（${c.dtMs}ms），属窗口抖动")
         }
 
         // ⑦ 按目的地类型选时间窗。

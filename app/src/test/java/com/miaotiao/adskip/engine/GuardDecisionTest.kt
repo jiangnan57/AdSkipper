@@ -78,7 +78,8 @@ class GuardDecisionTest {
             destIsCustom = custom,
             destIsUserDriven = dest in AppLists.USER_DRIVEN,
             originIsUserDriven = origin != null && origin in AppLists.USER_DRIVEN,
-            originIsAdProne = origin != null && origin in AppLists.AD_PRONE
+            originIsAdProne = origin != null && origin in AppLists.AD_PRONE,
+            originIsShell = origin != null && AppLists.isShell(origin)
         )
     )
 
@@ -556,5 +557,133 @@ class GuardDecisionTest {
     fun 空包名不能参与往返判断() {
         val s = samples("" to 1_000L, "a" to 1_100L, "" to 1_200L)
         assertFalse("空包名说明事件还没稳定，不能据此判定", GuardDecision.isMultiWindow(s, 1_200L))
+    }
+
+    // ================================================================
+    // 五、投诉场景 3（2026-11-20）：拼多多 / 美团被反复弹回
+    //
+    // 用户原话「拼多多多次拦截美团拦截」。日志：
+    //   拦截跳转 pinduoduo：像广告跳转（来源 com.miui.personalassistant，1331ms，cold=true splash=true）
+    //   拦截跳转 meituan：像广告跳转（来源 miui.systemui.plugin，128ms，cold=true splash=false）
+    // 12:32:56 到 12:33:14 之间连拦 5 次，中间还夹着
+    //   「已从 pinduoduo 退出（该页会吞返回键）」。
+    // ================================================================
+
+    private val negativeScreen = "com.miui.personalassistant"
+    private val systemUiPlugin = "miui.systemui.plugin"
+    private val pdd = "com.xunmeng.pinduoduo"
+    private val meituan = "com.sankuai.meituan"
+
+    @Test
+    fun 从负一屏点开拼多多不许回退() {
+        // 负一屏（智能助理）作为来源时，三个「像广告」的信号全是假的：
+        //   cold=true  —— 它本来就不是 App，calcCold 对 passThrough 恒为 true
+        //   settled=false —— 扫描链压根不扫它
+        //   dt 很短    —— 用户点完卡片 1.3 秒就到了
+        val v = judge(
+            dest = pdd,
+            origin = negativeScreen,
+            cold = true,
+            settled = false,
+            splash = true,
+            dtMs = 1_331L
+        )
+        assertFalse("负一屏不是 App，是找 App 的地方", v.shouldBack)
+        assertTrue(v.reason.contains("负一屏"))
+    }
+
+    @Test
+    fun 从控制中心插件跳美团不许回退() {
+        // 日志原样：128ms。系统 UI 插件的窗口一闪就被当成了来源。
+        val v = judge(
+            dest = meituan,
+            origin = systemUiPlugin,
+            cold = true,
+            settled = false,
+            splash = false,
+            dtMs = 128L
+        )
+        assertFalse(v.shouldBack)
+    }
+
+    @Test
+    fun 来源停留不足五百毫秒算窗口抖动() {
+        // 真实的摇一摇链路（打开 App → 广告渲染 → 摇 → 落地）最快也要 1 秒。
+        // 128ms 只可能是切换动画的中间帧，不能据此按返回。
+        val v = judge(dest = meituan, origin = douyin, cold = true, dtMs = 128L)
+        assertFalse(v.shouldBack)
+        assertTrue(v.reason.contains("抖动"))
+    }
+
+    @Test
+    fun 真正的摇一摇仍然要拦() {
+        // 底线：别为了修误拦把该拦的也放过了。
+        // 冷启动 + 开屏期 + 2 秒落地 = 教科书式的摇一摇广告。
+        val v = judge(dest = taobao, origin = douyin, cold = true, settled = false, splash = true, dtMs = 2_000L)
+        assertTrue("这条是真广告，必须拦", v.shouldBack)
+    }
+
+    // ================================================================
+    // 六、重复拦截熔断
+    //
+    // 名单再全也总有想不到的系统入口（各 ROM 负一屏、小组件、语音助手）。
+    // 连续三次就是用户意图，这是最后一道保险。
+    // ================================================================
+
+    @Test
+    fun 连续三次拦截同一目的地就熔断() {
+        val g = GuardDecision.RepeatGuard()
+        val t0 = 10_000L
+        assertFalse("第 1 次只记账", g.noteBack(meituan, t0))
+        assertFalse("第 2 次还拦", g.noteBack(meituan, t0 + 3_000L))
+        assertTrue("第 3 次就该放行了", g.noteBack(meituan, t0 + 6_000L))
+    }
+
+    @Test
+    fun 熔断期内同一目的地直接放行() {
+        val g = GuardDecision.RepeatGuard()
+        val t0 = 10_000L
+        repeat(3) { g.noteBack(meituan, t0 + it * 1_000L) }
+        assertTrue(g.isMuted(meituan, t0 + 3_000L))
+        assertTrue(g.muteLeftMs(meituan, t0 + 3_000L) > 0L)
+    }
+
+    @Test
+    fun 熔断只针对同一个目的地() {
+        val g = GuardDecision.RepeatGuard()
+        val t0 = 10_000L
+        repeat(3) { g.noteBack(meituan, t0 + it * 1_000L) }
+        assertFalse("别的地儿该拦还得拦", g.isMuted(taobao, t0 + 3_000L))
+    }
+
+    @Test
+    fun 熔断到期后恢复拦截() {
+        val g = GuardDecision.RepeatGuard()
+        val t0 = 10_000L
+        repeat(3) { g.noteBack(meituan, t0 + it * 1_000L) }
+        // 熔断是从**第 3 次拦截**（t0+2s）开始算的，所以到期时刻要再加 2 秒
+        val after = t0 + 2_000L + GuardDecision.REPEAT_MUTE_MS + 1_000L
+        assertFalse("5 分钟过了，可以重新拦", g.isMuted(meituan, after))
+    }
+
+    @Test
+    fun 超过一分钟的零散拦截不算连续() {
+        val g = GuardDecision.RepeatGuard()
+        val t0 = 10_000L
+        assertFalse(g.noteBack(meituan, t0))
+        // 两次之间隔了 40 秒，累计超过 1 分钟窗口 → 重新计数
+        assertFalse(g.noteBack(meituan, t0 + 40_000L))
+        assertFalse(g.noteBack(meituan, t0 + 110_000L))
+    }
+
+    @Test
+    fun 不同目的地穿插出现不算连续() {
+        val g = GuardDecision.RepeatGuard()
+        val t0 = 10_000L
+        assertFalse(g.noteBack(meituan, t0))
+        assertFalse(g.noteBack(pdd, t0 + 1_000L)) // 中间换了目的地，商家计数归零
+        assertFalse(g.noteBack(meituan, t0 + 2_000L))
+        assertFalse(g.noteBack(meituan, t0 + 3_000L))
+        assertFalse("中间被打断过，要重新数到三次", g.isMuted(meituan, t0 + 4_000L))
     }
 }

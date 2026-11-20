@@ -616,8 +616,12 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 桌面、系统页、输入法、浏览器：只当「路过」，不参与换 App 判定。 */
     private fun isPassThrough(pkg: String): Boolean {
+        // 系统外壳（桌面 / 负一屏 / 控制中心插件 / 语音助手）既不扫、也不当来源。
+        // 它们的界面上全是「App 图标 / 卡片」，扫出来的控件没有任何跳过意义，
+        // 而且一旦被当成来源 App，「冷启动 + 从没扫到内容页」会让防跳转
+        // 把用户从负一屏点开的每个 App 都弹回去（v1.3.8 修的 bug）。
         return isHome(pkg) || pkg in NEVER_SCAN || pkg in imePackages ||
-            pkg in IME_FALLBACK || AppLists.isBrowser(pkg)
+            pkg in IME_FALLBACK || AppLists.isBrowser(pkg) || AppLists.isShell(pkg)
     }
 
     private fun startScanThread() {
