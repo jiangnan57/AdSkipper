@@ -62,9 +62,11 @@ object AppLists {
         "com.android.vending",
         "com.xiaomi.market",
         "com.huawei.appmarket",
+        "com.hihonor.appmarket", // 荣耀独立后的商店，不同包名
         "com.heytap.market",
         "com.oppo.market",
         "com.bbk.appstore",
+        "com.sec.android.app.samsungapps", // 三星 Galaxy Store
         "com.tencent.android.qqdownloader",
         "com.qihoo.appstore",
         "com.wandoujia.phoenix2"
@@ -215,15 +217,88 @@ object AppLists {
     )
 
     /**
+     * 运行时发现的系统外壳：所有能处理 `CATEGORY_HOME` 的包，
+     * 加上语音助手（`ACTION_ASSIST`）与应用抽屉（`ACTION_ALL_APPS`）。
+     *
+     * ## 为什么还要这一层
+     *
+     * [SHELL] 是静态名单，只能覆盖「我见过」的 ROM。而桌面进程的包名
+     * 五花八门——`com.miui.home` 里根本没有 launcher 这个词，
+     * `com.android.settings/.FallbackHome` 更离谱（桌面居然是设置里的一个 Activity）。
+     * 靠 `SHELL_HINTS` 猜包名，遇到新 ROM 就只能等用户反馈再补一版。
+     *
+     * 而「谁是桌面」这个问题系统本来就有权威答案：谁能处理 HOME Intent，
+     * 谁就是桌面。开机后问一次 `PackageManager`，比维护一张永远不全的名单可靠。
+     *
+     * ## 为什么不持久化
+     *
+     * 每次服务连接时重算。一次 `queryIntentActivities` 是毫秒级的本地查询，
+     * 换机、装新桌面、恢复备份之后都能自动跟上，不存在「缓存过期」。
+     *
+     * ## 风险
+     *
+     * 命中它的唯一后果是 `JumpGuard` 清空来源上下文 → 判定放过。
+     * 也就是说最坏情况是**少拦一次**，不会多拦。方向是安全的。
+     */
+    @Volatile
+    private var runtimeShell: Set<String> = emptySet()
+
+    /**
+     * 刷新运行时外壳名单。由 `SkipAccessibilityService.onServiceConnected` 调用。
+     *
+     * 不做任何异常转义之外的处理：某些 ROM 上查询 HOME 会抛
+     * `SecurityException`，那时保留空集合，退回纯静态名单。
+     */
+    fun loadRuntimeShell(ctx: android.content.Context) {
+        val pm = ctx.packageManager
+        val found = LinkedHashSet<String>()
+        fun add(intent: android.content.Intent) {
+            runCatching {
+                pm.queryIntentActivities(intent, 0).forEach { ri ->
+                    ri.activityInfo?.packageName?.let { found += it }
+                }
+            }
+        }
+        add(android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_HOME))
+        add(android.content.Intent(android.content.Intent.ACTION_ASSIST))
+        add(android.content.Intent("android.intent.action.ALL_APPS"))
+        runtimeShell = mergeRuntimeShell(found)
+        android.util.Log.i("AdSkip", "runtime shell=${runtimeShell.size} $runtimeShell")
+    }
+
+    /**
+     * 从「能处理 HOME / ASSIST / ALL_APPS 的包」里挑出真正该当外壳的。
+     *
+     * **必须排除 [SYSTEM_UI]**：AOSP 的兜底桌面 `FallbackHome` 就住在
+     * `com.android.settings` 里（实测本机枚举结果里赫然有这个包）。
+     * 而设置页的语义是**透明层**——用户从 App 跳去设置授权、返回 App，
+     * 来源上下文必须保留。如果被当成「桌面」reset 一次，返回时来源就成了 null，
+     * 判定退化成「没有来源 App」，防跳转在授权后那几分钟里等于关掉。
+     *
+     * 同一个包挂在两份名单上时，结果取决于判断顺序——这个项目已经因此栽过
+     * 四次（见 [STORES] / [SYSTEM_UI] 的注释）。与其靠顺序，不如在生成阶段
+     * 就排除，让两份名单互斥。
+     */
+    fun mergeRuntimeShell(candidates: Collection<String>): Set<String> =
+        candidates.filterNot { isSystemUi(it) }.toSet()
+
+    /** 单元测试用：直接注入运行时名单，不依赖 PackageManager */
+    fun setRuntimeShellForTest(pkgs: Collection<String>) {
+        runtimeShell = pkgs.toSet()
+    }
+
+    /**
      * 是不是系统外壳（桌面 / 负一屏 / 控制中心插件 / 全局搜索）。
      *
      * 命中即「用户在自己找 App」，一律不参与跳转判定。
      */
     fun isShell(pkg: String): Boolean {
-        if (pkg in SHELL) return true
+        if (pkg in SHELL || pkg in runtimeShell) return true
         val lower = pkg.lowercase()
         // 前缀匹配兜住 "com.miui.home.xxx" 这类子包
         if (SHELL.any { pkg.startsWith("$it.") }) return true
+        if (runtimeShell.any { pkg.startsWith("$it.") }) return true
         return SHELL_HINTS.any { lower.contains(it) }
     }
 

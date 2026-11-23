@@ -156,4 +156,83 @@ class AppListsTest {
             assertFalse("$it 只是覆盖层，不是桌面", AppLists.isShell(it))
         }
     }
+
+    @Test
+    fun 各ROM应用商店包名齐全() {
+        // 漏一个的后果不是「少拦一次」，而是那个 ROM 的用户完全用不上这个功能：
+        // 商店是唯一「不限来源」的拦截目标，名单里没有 = 永远不拦。
+        listOf(
+            "com.xiaomi.market", // 小米
+            "com.huawei.appmarket", // 华为
+            "com.hihonor.appmarket", // 荣耀（独立后改了包名）
+            "com.heytap.market", // OPPO / 一加 / realme
+            "com.bbk.appstore", // vivo / iQOO
+            "com.sec.android.app.samsungapps", // 三星 Galaxy Store
+            "com.android.vending" // Google Play
+        ).forEach {
+            assertTrue("$it 是应用商店", AppLists.isStore(it))
+        }
+    }
+
+    // ================================================================
+    // 运行时发现的系统外壳
+    //
+    // 静态名单只能覆盖「见过的 ROM」，而桌面进程的包名毫无规律
+    // （com.miui.home 里连 launcher 这个词都没有；原生兜底桌面更是
+    // 塞在 com.android.settings 里）。所以「谁是桌面」交给系统回答。
+    // ================================================================
+
+    @Test
+    fun 运行时发现的桌面也必须被当成系统外壳() {
+        try {
+            AppLists.setRuntimeShellForTest(listOf("com.somevendor.home"))
+            assertTrue("系统说是 HOME 处理器，就该当桌面", AppLists.isShell("com.somevendor.home"))
+            // 有些 ROM 的桌面进程带后缀
+            assertTrue(AppLists.isShell("com.somevendor.home.overlay"))
+        } finally {
+            AppLists.setRuntimeShellForTest(emptyList())
+        }
+    }
+
+    @Test
+    fun 运行时名单不能顺手把真实应用卷进来() {
+        try {
+            AppLists.setRuntimeShellForTest(listOf("com.somevendor.home"))
+            listOf("com.somevendor.shop", "com.somevendor.homework").forEach {
+                assertFalse("$it 不是桌面，只是名字挨着", AppLists.isShell(it))
+            }
+        } finally {
+            AppLists.setRuntimeShellForTest(emptyList())
+        }
+    }
+
+    @Test
+    fun 清空运行时名单后静态名单仍然有效() {
+        // 某些 ROM 上查询 HOME 会抛 SecurityException，那时 runtimeShell 是空的，
+        // 功能必须退回静态名单，不能整体失效。
+        AppLists.setRuntimeShellForTest(emptyList())
+        assertTrue(AppLists.isShell("com.miui.home"))
+        assertTrue(AppLists.isShell("com.miui.personalassistant"))
+    }
+
+    @Test
+    fun 运行时名单必须排除系统UI包() {
+        // 实测本机枚举 HOME 处理器时，除了 com.miui.home 还会返回
+        // com.android.settings —— 那是 AOSP 的兜底桌面 FallbackHome 住在设置里。
+        // 设置页是「透明层」（保留来源），桌面是「清空来源」，两者语义相反。
+        // 如果让设置混进运行时外壳，用户从 App 跳去授权再返回，
+        // 来源就变成 null，防跳转在那之后几分钟里等于关闭。
+        val merged = AppLists.mergeRuntimeShell(
+            listOf("com.miui.home", "com.android.settings", "com.miui.voiceassist")
+        )
+        try {
+            AppLists.setRuntimeShellForTest(merged)
+            assertTrue("桌面要保留", "com.miui.home" in merged)
+            assertTrue("语音助手要保留", "com.miui.voiceassist" in merged)
+            assertFalse("设置是透明层，不能当桌面", "com.android.settings" in merged)
+            assertFalse("设置仍应走系统 UI 分支", AppLists.isShell("com.android.settings"))
+        } finally {
+            AppLists.setRuntimeShellForTest(emptyList())
+        }
+    }
 }

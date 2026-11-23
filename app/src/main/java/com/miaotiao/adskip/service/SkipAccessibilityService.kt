@@ -410,6 +410,8 @@ class SkipAccessibilityService : AccessibilityService() {
         // 重新下发配置，在部分 ROM 上反而更容易踩到「事件静默」。
         startScanThread()
         loadImePackages()
+        // 「谁是桌面」交给系统回答，比维护静态名单可靠（见 AppLists.runtimeShell）
+        AppLists.loadRuntimeShell(this)
         reloadRules()
         showGhostWindow()
         lastEventAt = SystemClock.elapsedRealtime()
