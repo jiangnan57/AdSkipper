@@ -49,10 +49,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swSplash: MaterialSwitch
     private lateinit var swPopup: MaterialSwitch
     private lateinit var swGuard: MaterialSwitch
-    private lateinit var swShadow: MaterialSwitch
     private lateinit var swStrict: MaterialSwitch
-    private lateinit var swShield: MaterialSwitch
-    private lateinit var swShake: MaterialSwitch
     private lateinit var swNotice: MaterialSwitch
     private lateinit var swAllApps: MaterialSwitch
     private lateinit var swLearn: MaterialSwitch
@@ -78,10 +75,7 @@ class MainActivity : AppCompatActivity() {
         swSplash = findViewById(R.id.swSplash)
         swPopup = findViewById(R.id.swPopup)
         swGuard = findViewById(R.id.swGuard)
-        swShadow = findViewById(R.id.swShadow)
         swStrict = findViewById(R.id.swStrict)
-        swShield = findViewById(R.id.swShield)
-        swShake = findViewById(R.id.swShake)
         swNotice = findViewById(R.id.swNotice)
         swAllApps = findViewById(R.id.swAllApps)
         swLearn = findViewById(R.id.swLearn)
@@ -96,7 +90,12 @@ class MainActivity : AppCompatActivity() {
             runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         }
         btnGrant = findViewById(R.id.btnGrant)
-        findViewById<MaterialButton>(R.id.btnInspector).setOnClickListener { toggleInspector() }
+        // 自检/探测器不再放在界面上：对普通用户它只是一排看不懂的按钮。
+        // 需要排查时，长按标题 1.5 秒即可进来，能力一点没少。
+        findViewById<TextView>(R.id.tvAppName).setOnLongClickListener {
+            toggleInspector()
+            true
+        }
         findViewById<MaterialButton>(R.id.btnRules).setOnClickListener {
             startActivity(Intent(this, RulesActivity::class.java))
         }
@@ -285,11 +284,7 @@ class MainActivity : AppCompatActivity() {
         swSplash.isChecked = Prefs.skipSplash
         swPopup.isChecked = Prefs.closePopups
         swGuard.isChecked = Prefs.guardJump
-        val mode = Prefs.guardMode
-        swShadow.isChecked = mode == "SHADOW"
-        swStrict.isChecked = mode == "STRICT"
-        swShield.isChecked = Prefs.expShield
-        swShake.isChecked = Prefs.expShake
+        swStrict.isChecked = Prefs.guardMode == "STRICT"
         swNotice.isChecked = Prefs.guardNotice
         swAllApps.isChecked = Prefs.skipAllApps
         swLearn.isChecked = Prefs.autoLearn
@@ -308,17 +303,9 @@ class MainActivity : AppCompatActivity() {
             showBlocklistDialog()
             true
         }
-        // 三个档位互斥，用同一份 Prefs.guardMode 表达。
-        // 分开存两个 boolean 迟早会出现「影子和严格同时开」这种无意义状态。
-        swShadow.setOnCheckedChangeListener { _, v ->
-            Prefs.guardShadow = v
-            applyMode(if (v) "SHADOW" else "COMPAT")
-        }
         swStrict.setOnCheckedChangeListener { _, v ->
             applyMode(if (v) "STRICT" else "COMPAT")
         }
-        swShield.setOnCheckedChangeListener { _, v -> Prefs.expShield = v }
-        swShake.setOnCheckedChangeListener { _, v -> Prefs.expShake = v }
         swNotice.setOnCheckedChangeListener { _, v -> Prefs.guardNotice = v }
         swAllApps.setOnCheckedChangeListener { _, v -> Prefs.skipAllApps = v }
         swLearn.setOnCheckedChangeListener { _, v -> Prefs.autoLearn = v }
@@ -337,10 +324,10 @@ class MainActivity : AppCompatActivity() {
      */
     private fun applyMode(mode: String) {
         Prefs.guardMode = mode
+        // 影子模式不再有界面入口，但存储里的开关仍然是「档位」的一部分：
+        // 从旧版本升级上来的用户如果原来是影子档，继续按影子档跑。
         Prefs.guardShadow = mode == "SHADOW"
-        val shadow = mode == "SHADOW"
         val strict = mode == "STRICT"
-        if (::swShadow.isInitialized && swShadow.isChecked != shadow) swShadow.isChecked = shadow
         if (::swStrict.isInitialized && swStrict.isChecked != strict) swStrict.isChecked = strict
     }
 
