@@ -126,8 +126,16 @@ object Prefs {
         set(value) = setBool("exp_entry", value)
 
     /** 规则没命中时，是否允许用启发式识别一个候选并记住它 */
+    /**
+     * 规则没命中时自己认按钮并记住。
+     *
+     * 默认改成 true：界面上已经没有这个开关了，再默认关等于让新用户
+     * 直接少了「规则没覆盖的 App 也能跳」这条能力。
+     * 学习只发生在自识别真的点中之后，且只学控件 id / 干净短文本，
+     * 不学坐标（见 LearnStore），风险可控。
+     */
     var autoLearn: Boolean
-        get() = sp?.getBoolean("auto_learn", false) ?: false
+        get() = sp?.getBoolean("auto_learn", true) ?: true
         set(value) = setBool("auto_learn", value)
 
     /**

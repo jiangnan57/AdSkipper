@@ -33,7 +33,21 @@ object SplashScanner {
         val full: Boolean = true,
         val contentPage: Boolean = false,
         /** 这页里有没有广告 SDK 的痕迹（见 [AdFingerprint]）。v1.4.0 只记日志 */
-        val adFingerprint: Boolean = false
+        val adFingerprint: Boolean = false,
+        /**
+         * 这页是不是**开屏广告页**（强标记：广告 SDK 的固定产物）。
+         * 见 [SplashScanner.SPLASH_MARK]。
+         */
+        val splashMark: Boolean = false,
+        /**
+         * 「跳过」是纯自绘按钮时的候选矩形（无文字、无 id、无描述）。
+         *
+         * 穿山甲竖屏开屏模板就是这么画的：一个 150×150 的圆形 View，
+         * 「跳过」两个字用 Canvas 画上去，uiautomator 和
+         * AccessibilityNodeInfo 里**一个字都看不到**。
+         * 这类按钮靠关键词永远匹配不到，只能靠形状 + 位置认。
+         */
+        val drawSkip: android.graphics.Rect? = null
     )
 
     private val COUNTDOWN = Regex("""^\d{1,2}\s*[sS秒]?$""")
@@ -143,7 +157,7 @@ object SplashScanner {
         // 这两类误伤的深层原因就在这里。
         //
         // 所以统计必须在规则命中判断**之前**算，和规则命中完全无关。
-        val stats = pageStats(tree, screenH, screenArea)
+        val stats = pageStats(tree, screenW, screenH, screenArea)
 
         // ---------------- 规则命中（本地匹配，零额外 IPC）
         val fast = ruleHits(tree, splash, screenW, screenH, screenArea)
@@ -152,7 +166,9 @@ object SplashScanner {
             val result = Result(
                 tree.size, elapsed(t0), top.firstOrNull(), top, stats.bigArea,
                 full = false, contentPage = stats.contentPage,
-            adFingerprint = stats.adFingerprint
+            adFingerprint = stats.adFingerprint,
+            splashMark = stats.splashMark,
+            drawSkip = stats.drawSkip
             )
             pool.releaseExcept(top)
             return result
@@ -161,7 +177,9 @@ object SplashScanner {
             val result = Result(
                 tree.size, elapsed(t0), null, emptyList(), stats.bigArea,
                 full = false, contentPage = stats.contentPage,
-            adFingerprint = stats.adFingerprint
+            adFingerprint = stats.adFingerprint,
+            splashMark = stats.splashMark,
+            drawSkip = stats.drawSkip
             )
             pool.releaseExcept(emptyList())
             return result
@@ -215,7 +233,9 @@ object SplashScanner {
         val result = Result(
             stats.count, elapsed(t0), top.firstOrNull(), top, stats.bigArea,
             full = true, contentPage = stats.contentPage,
-            adFingerprint = stats.adFingerprint
+            adFingerprint = stats.adFingerprint,
+            splashMark = stats.splashMark,
+            drawSkip = stats.drawSkip
         )
         pool.releaseExcept(top)
         return result
@@ -235,11 +255,14 @@ object SplashScanner {
         val tabHits: Int,
         val adSignal: Boolean,
         val contentPage: Boolean,
-        val adFingerprint: Boolean = false
+        val adFingerprint: Boolean = false,
+        val splashMark: Boolean = false,
+        val drawSkip: android.graphics.Rect? = null
     )
 
     private fun pageStats(
         tree: List<AccessibilityNodeInfo>,
+        screenW: Int,
         screenH: Int,
         screenArea: Long
     ): PageStats {
@@ -251,6 +274,11 @@ object SplashScanner {
         var tabHits = 0
         var adSignal = false
         var adFingerprint = false
+        var splashMark = false
+        // 自绘跳过按钮：方形、小、贴边。取「面积最小的那个」——
+        // 跳过按钮总是广告页上最小的那个方形可点元素。
+        var drawSkip: android.graphics.Rect? = null
+        var drawSkipArea = Long.MAX_VALUE
 
         for (n in tree) {
             count++
@@ -282,9 +310,27 @@ object SplashScanner {
                 if (t != null && t.length <= 24) {
                     if (AD_WORD.containsMatchIn(t)) adSignal = true
                     if (r.top > screenH * 0.80f && TAB_WORDS.matches(t.trim())) tabHits++
+                    // 开屏广告页的强标记：正常内容页不会出现这几句
+                    if (!splashMark && DrawSkip.markOf(t)) splashMark = true
                 }
                 val d = desc
                 if (d != null && d.length <= 24 && AD_WORD.containsMatchIn(d)) adSignal = true
+            }
+
+            // 广告 SDK 的容器 id / 描述，也是开屏广告的强标记。
+            // 实测小红书那条开屏广告：`id_splash_bottom_logo`（穿山甲固定 id）
+            // + `desc=NativeVideoAdView`，两句都在。
+            if (!splashMark && DrawSkip.markOfId(vid)) splashMark = true
+            if (!splashMark && DrawSkip.markOfDesc(desc)) splashMark = true
+
+            // 纯自绘的「跳过」按钮：可点、但既没文字也没 id 也没描述。
+            // 形状判据（圆形/方形 + 小 + 贴边）是唯一能用的线索。
+            if (n.isClickable && !hasText && vid.isNullOrBlank() &&
+                area < drawSkipArea &&
+                DrawSkip.shapeOk(r.width(), r.height(), r.centerX(), r.top, r.bottom, screenW, screenH)
+            ) {
+                drawSkipArea = area
+                drawSkip = android.graphics.Rect(r)
             }
 
             // 诊断：把带文字 / 带 id 的节点原样打出来，用来确认
@@ -307,7 +353,7 @@ object SplashScanner {
 
         return PageStats(
             count, bigArea, scrollArea, clickable, textCount, tabHits, adSignal, contentPage,
-            adFingerprint
+            adFingerprint, splashMark, drawSkip
         )
     }
 

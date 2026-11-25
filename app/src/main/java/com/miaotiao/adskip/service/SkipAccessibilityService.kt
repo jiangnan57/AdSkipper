@@ -132,6 +132,16 @@ class SkipAccessibilityService : AccessibilityService() {
         private const val HEURISTIC_WINDOW_MS = 2_600L
 
         /**
+         * 自绘跳过按钮的点击窗口。
+         *
+         * 比自识别的 2.6 秒宽：开屏广告的物料是网络加载的，实测有 4 秒
+         * 才渲染出来的（这时窗口已过，自识别整段失效）。放宽到 6 秒是
+         * 安全的，因为这条路径还压着两个硬条件——页面必须有开屏广告的
+         * 强标记、且不是内容页。
+         */
+        private const val DRAW_SKIP_WINDOW_MS = 6_000L
+
+        /**
          * 整树遍历扫描的最小间隔。
          *
          * 整树遍历是唯一能匹配纯文本按钮的路径（系统文本检索已从快路径移除），
@@ -219,10 +229,28 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastPopupAt = 0L
 
     private var coordTapped = false
+
+    /**
+     * 本轮是否已经点过「自绘跳过按钮」。
+     *
+     * 单独一个标志，不跟 [coordTapped] 合用：规则里配了坐标的 App 和
+     * 自绘按钮的 App 是两类，共用一个标志会让先跑的那个把后跑的那个挡掉。
+     */
+    private var drawTapped = false
     private var lastLearnAt = 0L
     private var watchScans = 0
     private var watchCost = 0L
     private var watchHit = false
+
+    /**
+     * 这一轮监测里有没有真的出现过「开屏广告页」。
+     *
+     * 只用来决定「未找到跳过按钮」要不要写进应用内记录：
+     * 用户从桌面点开一个本来就没广告的 App，也会扫满一整个窗口期，
+     * 每次都记一条「未找到跳过按钮」，看起来像功能天天在失效。
+     * 只有真的见过广告页却没点掉，那条记录才有意义。
+     */
+    private var sawAdPage = false
 
     /** 这一轮监测是不是「从桌面/后台冷启动」进来的。自识别只在这种场景下启用 */
     private var watchCold = false
@@ -1111,9 +1139,11 @@ class SkipAccessibilityService : AccessibilityService() {
         // 才有资格说它还停在开屏期，没监测过的一律当作「不知道」，宁可不拦。
         JumpGuard.noteSplashStarted(pkg)
         coordTapped = false
+        drawTapped = false
         watchScans = 0
         watchCost = 0L
         watchHit = false
+        sawAdPage = false
         heurClicks = 0
         rootFailLogged = false
         lastFullScanAt = 0L
@@ -1139,9 +1169,9 @@ class SkipAccessibilityService : AccessibilityService() {
             watchPkg?.let { JumpGuard.noteSplashEnded(it) }
             // 扫了一整轮什么都没点，把原因留在应用内记录里，
             // 用户不用连电脑也能看到「是没找到按钮，还是根本没拿到界面」
-            if (!watchHit && watchScans > 0) {
+            if (!watchHit && sawAdPage) {
                 val n = rules?.apps?.get(watchPkg ?: "")?.name?.ifBlank { null } ?: watchPkg
-                SkipLog.add("未找到跳过按钮：$n（扫了 $watchScans 次）")
+                SkipLog.add("看到广告页但没认出跳过按钮：$n")
             }
         }
         watching = false
@@ -1266,7 +1296,10 @@ class SkipAccessibilityService : AccessibilityService() {
             // 一整轮里只记一次，避免 30 多条重复
             if (!rootFailLogged) {
                 rootFailLogged = true
-                SkipLog.add("取不到 ${app.name.ifBlank { pkg }} 的界面（系统无障碍没给窗口）")
+                // 只进 logcat，不进应用内记录：冷启动瞬间拿不到窗口是常态
+                // （App 还没画第一帧），用户看到只会以为软件坏了。
+                // 服务真的哑掉有另一条判定（连续 60 秒取不到窗口）。
+                Log.d(TAG, "root null pkg=$pkg（冷启动早期属正常）")
             }
             return true
         }
@@ -1352,6 +1385,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 广告 SDK 指纹：只记 8 秒，给 JumpGuard 划分证据档位用（v1.4.0）。
         // 即便这一轮没命中跳过按钮也要报 —— 指纹说的是「屏幕上有广告」，
         // 和「找没找到跳过按钮」是两件事。
+        if (result.splashMark || result.adFingerprint) sawAdPage = true
         if (result.adFingerprint) {
             JumpGuard.noteAdSeen(pkg)
             // v1.5 实验：确认屏幕上有广告 SDK，就盖一层触摸屏蔽，
@@ -1420,6 +1454,38 @@ class SkipAccessibilityService : AccessibilityService() {
                 watchDeadline = maxOf(watchDeadline, now + 700L)
             }
             return true
+        }
+
+        // ---- 兜底：纯自绘的「跳过」按钮（无文字 / 无 id / 无描述）
+        //
+        // 穿山甲竖屏开屏模板把「跳过」两个字画在 Canvas 上，节点树里一个字
+        // 都没有。实测小红书那条开屏广告就是这样：整页只有 2 个可点节点，
+        // 一个 150×150 的圆形跳过、一个 120×53 的「广告」小标签，
+        // 两者的 text / content-desc / resource-id 全是空。
+        // 关键词匹配永远命中不了，只能靠「方形 + 小 + 贴边」认形状。
+        //
+        // 形状是会撞的（视频 App 主界面也有 150×150 的发布按钮），
+        // 所以必须同时满足：
+        //   ① 有开屏广告强标记（[SplashScanner] 的 SPLASH_MARK / 广告 SDK id）；
+        //   ② 页面不是内容页；
+        //   ③ 还在开屏窗口内。
+        // 三条都成立才动手，宁可漏，不可误点。
+        val draw = result.drawSkip
+        if (draw != null && result.splashMark && !result.contentPage &&
+            !drawTapped && !isRecent("splash:$pkg", 4_000L) &&
+            now - lastClickAt >= CLICK_GAP_MS && now - watchStart < DRAW_SKIP_WINDOW_MS
+        ) {
+            drawTapped = true
+            TouchShield.releaseForTap(this)
+            if (Access.tapAt(this, draw.exactCenterX(), draw.exactCenterY())) {
+                lastClickAt = now
+                watchHit = true
+                markClicked("splash:$pkg")
+                Prefs.bumpSkip()
+                SkipLog.add("跳过 ${app.name.ifBlank { pkg }} · 自绘跳过按钮")
+                Log.i(TAG, "skipped pkg=$pkg label=自绘 how=shape rect=$draw")
+                watchDeadline = maxOf(watchDeadline, now + 700L)
+            }
         }
 
         // 规则里只有坐标时，等界面稳定一点再按坐标点一次

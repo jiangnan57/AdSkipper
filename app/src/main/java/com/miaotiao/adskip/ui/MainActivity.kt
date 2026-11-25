@@ -49,13 +49,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swSplash: MaterialSwitch
     private lateinit var swPopup: MaterialSwitch
     private lateinit var swGuard: MaterialSwitch
-    private lateinit var swStrict: MaterialSwitch
-    private lateinit var swNotice: MaterialSwitch
-    private lateinit var swAllApps: MaterialSwitch
-    private lateinit var swLearn: MaterialSwitch
 
-    private lateinit var etRemote: EditText
-    private lateinit var tvSyncStatus: TextView
 
     private val logListener: () -> Unit = { renderLog() }
 
@@ -75,14 +69,9 @@ class MainActivity : AppCompatActivity() {
         swSplash = findViewById(R.id.swSplash)
         swPopup = findViewById(R.id.swPopup)
         swGuard = findViewById(R.id.swGuard)
-        swStrict = findViewById(R.id.swStrict)
-        swNotice = findViewById(R.id.swNotice)
-        swAllApps = findViewById(R.id.swAllApps)
-        swLearn = findViewById(R.id.swLearn)
 
-        etRemote = findViewById(R.id.etRemote)
-        tvSyncStatus = findViewById(R.id.tvSyncStatus)
-        etRemote.setText(Prefs.remoteUrl)
+        // 远程规则地址仍然生效（预置/深链导入），但不再占界面：
+        // 普通用户没有「规则源」这个概念，一个输入框 + 两个按钮只会让他犹豫。
 
         bindSwitches()
 
@@ -96,15 +85,14 @@ class MainActivity : AppCompatActivity() {
             toggleInspector()
             true
         }
-        findViewById<MaterialButton>(R.id.btnRules).setOnClickListener {
-            startActivity(Intent(this, RulesActivity::class.java))
-        }
-        findViewById<MaterialButton>(R.id.btnSync).setOnClickListener { syncRemote(force = true) }
-        findViewById<MaterialButton>(R.id.btnClearRemote).setOnClickListener {
-            RemoteRules.clear(this)
-            SkipAccessibilityService.instance?.reloadRules()
-            renderSyncStatus()
-            toast("已清除远程规则缓存")
+        findViewById<MaterialButton>(R.id.btnRules).apply {
+            setOnClickListener { startActivity(Intent(this@MainActivity, RulesActivity::class.java)) }
+            // 长按看「自动学习」攒下的记录，原来是挂在自动学习开关上的。
+            // 开关收掉了，能力挪到这里，位置更合理：它本来就是个规则相关的东西。
+            setOnLongClickListener {
+                showLearnedDialog()
+                true
+            }
         }
         findViewById<TextView>(R.id.tvClearLog).apply {
             setOnClickListener { SkipLog.clear() }
@@ -271,7 +259,6 @@ class MainActivity : AppCompatActivity() {
             .setMessage("规则会控制自动点击，请只导入你信任的来源：\n\n$url")
             .setPositiveButton("信任并同步") { _, _ ->
                 Prefs.remoteUrl = url
-                etRemote.setText(url)
                 syncRemote(force = true)
             }
             .setNegativeButton("取消", null)
@@ -284,10 +271,6 @@ class MainActivity : AppCompatActivity() {
         swSplash.isChecked = Prefs.skipSplash
         swPopup.isChecked = Prefs.closePopups
         swGuard.isChecked = Prefs.guardJump
-        swStrict.isChecked = Prefs.guardMode == "STRICT"
-        swNotice.isChecked = Prefs.guardNotice
-        swAllApps.isChecked = Prefs.skipAllApps
-        swLearn.isChecked = Prefs.autoLearn
 
         swMaster.setOnCheckedChangeListener { _, v ->
             Prefs.masterEnabled = v
@@ -303,32 +286,6 @@ class MainActivity : AppCompatActivity() {
             showBlocklistDialog()
             true
         }
-        swStrict.setOnCheckedChangeListener { _, v ->
-            applyMode(if (v) "STRICT" else "COMPAT")
-        }
-        swNotice.setOnCheckedChangeListener { _, v -> Prefs.guardNotice = v }
-        swAllApps.setOnCheckedChangeListener { _, v -> Prefs.skipAllApps = v }
-        swLearn.setOnCheckedChangeListener { _, v -> Prefs.autoLearn = v }
-        swLearn.setOnLongClickListener {
-            showLearnedDialog()
-            true
-        }
-    }
-
-    /**
-     * 切换处置档位，并把另外两个开关同步过去。
-     *
-     * 只改一个 boolean 是不够的：界面上有三个开关，但存储里只有一个
-     * `guardMode`。不同步的话，用户从「严格」切到「影子」，界面会同时
-     * 亮着两个，而实际行为只按其中一条走。
-     */
-    private fun applyMode(mode: String) {
-        Prefs.guardMode = mode
-        // 影子模式不再有界面入口，但存储里的开关仍然是「档位」的一部分：
-        // 从旧版本升级上来的用户如果原来是影子档，继续按影子档跑。
-        Prefs.guardShadow = mode == "SHADOW"
-        val strict = mode == "STRICT"
-        if (::swStrict.isInitialized && swStrict.isChecked != strict) swStrict.isChecked = strict
     }
 
     override fun onStart() {
@@ -340,13 +297,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshStatus()
-        renderSyncStatus()
         autoSyncIfDue()
-        // 用户可能刚从通知栏点了「不再提示」回来，开关状态要跟着刷新。
-        // 先比较再赋值，避免一次无意义的写盘。
-        if (::swNotice.isInitialized && swNotice.isChecked != Prefs.guardNotice) {
-            swNotice.isChecked = Prefs.guardNotice
-        }
         // 用户很可能是刚从系统设置里授予悬浮窗权限回来的：
         // 微窗只在 onServiceConnected 挂一次，这里立刻让它补挂，不用等重启服务
         SkipAccessibilityService.instance?.retryGhostWindow()
@@ -402,52 +353,34 @@ class MainActivity : AppCompatActivity() {
     private fun renderLog() {
         if (!::tvLog.isInitialized) return
         runOnUiThread {
-            val list = SkipLog.snapshot()
+            // 只显示「和用户有关」的记录。
+            // 「规则已加载 50 个应用」「无障碍服务已连接」是启动噪音，
+            // 每次重连都会刷一条，把真正有用的（跳过 / 拦截 / 没找到按钮）
+            // 全挤到看不见的地方。数据本身不丢，导出时仍然是完整的。
+            val list = SkipLog.snapshot().filterNot {
+                it.contains("规则已加载") || it.contains("无障碍服务已连接")
+            }
             tvLog.text = if (list.isEmpty()) "暂无记录" else list.joinToString("\n")
         }
     }
 
     // ------------------------------------------------------------------ 远程规则
 
-    private fun renderSyncStatus() {
-        val stats = RemoteRules.cachedStats(this)
-        val cached = stats?.records ?: 0
-        val info = Prefs.lastSyncInfo
-        val time = if (Prefs.lastSyncAt > 0L) {
-            SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(Prefs.lastSyncAt))
-        } else ""
-
-        tvSyncStatus.text = when {
-            Prefs.remoteUrl.isBlank() && cached == 0 -> "未配置远程地址，当前只用内置规则"
-            cached == 0 -> if (info.isBlank()) "填地址后点「立即同步」" else info
-            else -> "远程库 $cached 条（开屏 ${stats?.splashApps ?: 0} / 弹窗 ${stats?.popupApps ?: 0}）" +
-                "${if (time.isNotBlank()) " · $time" else ""}\n" +
-                "仅对手机里已安装且能匹配包名的应用生效" +
-                if (info.isNotBlank() && !info.startsWith("同步成功")) "\n$info" else ""
-        }
-    }
-
     private fun syncRemote(force: Boolean) {
         if (syncing) return
-        val url = etRemote.text.toString().trim().ifBlank { Prefs.remoteUrl }
-        if (url.isBlank()) {
-            toast("先填一个规则地址")
-            return
-        }
-        Prefs.remoteUrl = url
-        etRemote.setText(url)
+        val url = Prefs.remoteUrl
+        // 界面上没有输入框了，地址只能来自预置值或深链导入。
+        // 没有就静默跳过，不打扰用户。
+        if (url.isBlank()) return
         syncing = true
-        tvSyncStatus.text = "同步中…"
 
         Thread {
             val r = RemoteRules.sync(applicationContext, url, force = force)
             runOnUiThread {
                 if (isDestroyed || isFinishing) return@runOnUiThread
                 syncing = false
-                renderSyncStatus()
                 if (r.ok) {
                     SkipAccessibilityService.instance?.reloadRules()
-                    toast(r.message)
                 } else {
                     toast(r.message)
                 }
@@ -458,10 +391,7 @@ class MainActivity : AppCompatActivity() {
     private fun autoSyncIfDue() {
         if (syncing || !Prefs.autoSync || Prefs.remoteUrl.isBlank()) return
         val due = System.currentTimeMillis() - Prefs.lastSyncAt > 6 * 3600_000L
-        if (due) {
-            etRemote.setText(Prefs.remoteUrl)
-            syncRemote(force = false)
-        }
+        if (due) syncRemote(force = false)
     }
 
     // ------------------------------------------------------------------ 自检
