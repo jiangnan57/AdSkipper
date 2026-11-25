@@ -49,6 +49,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swSplash: MaterialSwitch
     private lateinit var swPopup: MaterialSwitch
     private lateinit var swGuard: MaterialSwitch
+    private lateinit var swShadow: MaterialSwitch
     private lateinit var swAllApps: MaterialSwitch
     private lateinit var swLearn: MaterialSwitch
 
@@ -73,6 +74,7 @@ class MainActivity : AppCompatActivity() {
         swSplash = findViewById(R.id.swSplash)
         swPopup = findViewById(R.id.swPopup)
         swGuard = findViewById(R.id.swGuard)
+        swShadow = findViewById(R.id.swShadow)
         swAllApps = findViewById(R.id.swAllApps)
         swLearn = findViewById(R.id.swLearn)
 
@@ -275,6 +277,7 @@ class MainActivity : AppCompatActivity() {
         swSplash.isChecked = Prefs.skipSplash
         swPopup.isChecked = Prefs.closePopups
         swGuard.isChecked = Prefs.guardJump
+        swShadow.isChecked = Prefs.guardShadow
         swAllApps.isChecked = Prefs.skipAllApps
         swLearn.isChecked = Prefs.autoLearn
 
@@ -292,6 +295,7 @@ class MainActivity : AppCompatActivity() {
             showBlocklistDialog()
             true
         }
+        swShadow.setOnCheckedChangeListener { _, v -> Prefs.guardShadow = v }
         swAllApps.setOnCheckedChangeListener { _, v -> Prefs.skipAllApps = v }
         swLearn.setOnCheckedChangeListener { _, v -> Prefs.autoLearn = v }
         swLearn.setOnLongClickListener {

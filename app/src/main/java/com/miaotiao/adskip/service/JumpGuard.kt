@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import com.miaotiao.adskip.data.AppLists
+import com.miaotiao.adskip.data.InterceptLedger
 import com.miaotiao.adskip.data.Prefs
 import com.miaotiao.adskip.engine.GuardDecision
 import com.miaotiao.adskip.util.SkipLog
@@ -173,9 +174,17 @@ object JumpGuard {
      * @param cold 这个 App 是不是冷启动进来的（由 service 提供，它知道
      *   上一个前台是不是桌面）。这个信号只有 service 手里有，
      *   JumpGuard 自己猜不出来——猜错一次就是一次误回退。
+     * @param className 窗口事件里的 Activity 类名，只有事件路径拿得到；
+     *   轮询路径传 null。目前只用于区分 systemui 的「最近任务 / 通知栏」
+     *   和「通知本体」，见 [GuardDecision.isUserSurface]。
      */
     @Synchronized
-    fun onForeground(pkg: String, cold: Boolean, service: SkipAccessibilityService) {
+    fun onForeground(
+        pkg: String,
+        cold: Boolean,
+        service: SkipAccessibilityService,
+        className: String? = null
+    ) {
         if (!Prefs.guardJump) return
         val now = SystemClock.uptimeMillis()
 
@@ -185,7 +194,33 @@ object JumpGuard {
             lastRealPkg = pkg
             return
         }
-        if (pkg == service.packageName || pkg == "com.android.systemui") return
+        if (pkg == service.packageName) return
+
+        // ---- systemui：默认透明层，少数界面例外 ----
+        //
+        // 状态栏 / 导航栏 / 悬浮窗宿主都是 systemui。它盖在真实 App 上面，
+        // 下面的 App 还在，所以默认**不动**来源上下文（动了就会漏拦）。
+        //
+        // 但「最近任务」「下拉通知栏」「控制中心」是用户**自己切 App 的地方**：
+        // 从那里面点开淘宝，和从桌面点开淘宝没有区别。这时如果还留着
+        // 上一个 App 当来源，又会拼出「冷启动 + 没进正片 + 落地很快」的假象
+        // ——和负一屏那次事故一模一样（见 AppLists.SHELL 的注释）。
+        //
+        // 判据用**正向类名匹配**，不用「不是 heads-up 就算用户层」的反向写法：
+        // 反向写法会把正在播广告时弹出来的通知也当成用户切页，来源被清空 → 漏拦。
+        if (pkg == "com.android.systemui") {
+            if (GuardDecision.GUARD_SYSTEMUI_AS_USER_SURFACE &&
+                GuardDecision.isUserSurface(className)
+            ) {
+                android.util.Log.d(
+                    "AdSkip",
+                    "guard shell-surface pkg=systemui cls=$className 用户切页，清空来源"
+                )
+                reset()
+                lastRealPkg = pkg
+            }
+            return
+        }
 
         // 负一屏 / 控制中心插件 / 全局搜索 = 「用户在找 App 的地方」。
         //
@@ -235,6 +270,31 @@ object JumpGuard {
                 "guard skip pkg=$pkg 同一应用内切换，不参与跳转判定"
             )
             return
+        }
+
+        // ---- 回访：刚拦完又自己回来了？----
+        //
+        // 这不是判定依据，是**度量**。判定链给出的是一组条件（来源冷启动、
+        // 没进正片、落地很快……），它们是推断；而「用户被弹回去之后 10 秒内
+        // 又点开同一个 App」是事实。两者对不上时，错的一定是推断。
+        //
+        // 三个用途：日志里直接说清是哪一次拦错了；影子模式靠它算误拦率；
+        // v1.4.0 拿它当 (来源, 目的地) 配对的熔断信号。
+        //
+        // 自家 relaunch 必须排除——三级兜底第 2 级会把来源 App 拉回前台，
+        // 那不是「用户回访」，那是拦截成功。
+        val selfBack = restoringPkg == pkg && now - restoringAt < RESTORE_TTL_MS
+        val revisit = InterceptLedger.noteForeground(pkg, now, selfBack)
+        if (revisit != null) {
+            val sec = ((now - revisit.at) / 1000).coerceAtLeast(0)
+            android.util.Log.d(
+                "AdSkip",
+                "guard revisit pkg=$pkg after=${now - revisit.at}ms origin=${revisit.origin}"
+            )
+            SkipLog.add(
+                "拦截后 ${sec}s 又回到 ${pkg.substringAfterLast('.')}，" +
+                    "可能拦错了（来源 ${revisit.origin ?: "未知"}）"
+            )
         }
 
         // ---- 多窗口 / 小窗：两块界面同时可见 ----
@@ -336,7 +396,36 @@ object JumpGuard {
                 "watched=$originWatchedSnapshot -> ${verdict.action} ${verdict.reason}"
         )
 
-        if (!verdict.shouldBack) return
+        // 结构化的一行：字段固定、顺序固定，方便脚本统计「影子模式一周里
+        // 有多少次 would_back」。旧的 `guard pkg=` 行格式不动，
+        // `test_guard.sh` 依赖它。
+        val shadow = Prefs.guardShadow
+        android.util.Log.d(
+            "AdSkip",
+            "guard ctx dest=$pkg origin=$origin dt=${dt} cold=$originColdSnapshot " +
+                "splash=${originWatchedSnapshot && !originSettledSnapshot} " +
+                "settled=$originSettledSnapshot watched=$originWatchedSnapshot " +
+                "mode=${if (shadow) "shadow" else "normal"} -> ${verdict.action}"
+        )
+
+        when (GuardDecision.disposition(verdict, shadow)) {
+            // 本来就不该拦
+            GuardDecision.Disposition.NONE -> return
+
+            // 影子模式：判定照跑，但**不动手、不记账**。
+            //
+            // 这里必须直接 return，绝不能往下走到熔断 / lastBackAt /
+            // restoringPkg 那几行——一旦走过去，影子跑出来的就不是
+            // 「现行为」，而是「现行为 + 影子污染」，拿它定阈值等于用错数据。
+            GuardDecision.Disposition.SHADOW -> {
+                SkipLog.add(
+                    "【影子】本会拦截 ${pkg.substringAfterLast('.')}：${verdict.reason}"
+                )
+                return
+            }
+
+            GuardDecision.Disposition.ACT -> Unit
+        }
 
         // ---- 熔断：同一个目的地短时间内被反复拦 = 用户真的想进去 ----
         //
@@ -373,6 +462,8 @@ object JumpGuard {
         // 返回键会被它的欢迎页吃掉（淘宝实测连按两次都没反应）。
         // 交给 service 做三级兜底：返回 → 拉起原 App → 回桌面。
         service.backOffLanding(pkg, origin)
+        // 只记「真的动了手」的那几次。影子模式走不到这里。
+        InterceptLedger.record(pkg, origin, now)
         SkipLog.add("拦截跳转 ${pkg.substringAfterLast('.')}：${verdict.reason}")
     }
 
@@ -450,7 +541,7 @@ object JumpGuard {
     private fun isStore(pkg: String): Boolean = AppLists.isStore(pkg)
 
     private fun isInUserBlocklist(pkg: String): Boolean =
-        blockedList().any { pkg == it || pkg.startsWith("$it.") }
+        AppLists.isUserBlocked(pkg, blockedList())
 
     private fun blockedList(): List<String> {
         val raw = Prefs.guardBlocklist

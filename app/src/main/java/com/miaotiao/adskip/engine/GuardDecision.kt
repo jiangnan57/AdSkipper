@@ -94,6 +94,57 @@ object GuardDecision {
     const val MIN_DWELL_MS = 500L
 
     /**
+     * 是否把 `com.android.systemui` 的某些界面当成「用户切 App 的地方」。
+     *
+     * 关掉它就退回 v1.3.9 的行为（systemui 一律当透明层，什么都不做），
+     * 用来在真机上快速回滚。
+     */
+    const val GUARD_SYSTEMUI_AS_USER_SURFACE = true
+
+    /**
+     * systemui 里属于「用户自己切 App」的界面。
+     *
+     * 用户的动作是明确的：按最近任务键、下拉通知栏、拉控制中心、长按电源键。
+     * 从这些界面点开一个 App，和从桌面点开它是同一件事——上一个 App 的
+     * 上下文早已失效，必须清空来源，否则「冷启动 + 没进正片」会让它被
+     * 当成完美假来源（就是负一屏那次事故的同一形态）。
+     *
+     * 刻意**不**包含 `statusbar`：状态栏本身也是 heads-up 通知的宿主，
+     * 而 heads-up 经常在别的 App 播放时出现（音乐控制、下载完成）。
+     * 把 statusbar 当成「用户切页」，会把正在播广告的来源清掉 → 漏拦。
+     *
+     * `qs\.` 是控制中心面板的真实类名（`com.android.systemui.qs.QSContainerImpl`），
+     * 不是 `quicksettings`——这两个都写上，是因为不同 ROM 两者都出现过。
+     * 只在 `pkg == com.android.systemui` 时才会用这个正则，所以前缀够窄。
+     */
+    private val USER_SURFACE = Regex(
+        "(?i)recents|overview|notificationshade|quicksettings|qs\\.|globalscreen|globalsearch"
+    )
+
+    /**
+     * 反向否决：这些是**通知本体**，不是用户切页。
+     *
+     * 早期版本把 `statusbar` 写进正向名单，结果一条音乐通知就能把来源清空；
+     * 现在正向名单里已经没有它，这里再兜一层，防止有人为了「多拦」
+     * 把匹配放松到 `statusbar`。
+     */
+    private val HEADS_UP = Regex("(?i)heads?up|notificationrow|notificationview")
+
+    /**
+     * 这个 systemui 界面是不是「用户在这里切 App」。
+     *
+     * @param className 窗口事件里的 `className`。轮询路径拿不到，传 null，
+     *   此时一律返回 false —— 宁可不改判定（保持 v1.3.9 行为），
+     *   也不要基于猜测清空来源。
+     */
+    fun isUserSurface(className: String?): Boolean {
+        if (className.isNullOrBlank()) return false
+        if (HEADS_UP.containsMatchIn(className)) return false
+        return USER_SURFACE.containsMatchIn(className)
+    }
+
+
+    /**
      * 同一个目的地被连续拦截多少次，就认定「用户确实想去」，开始熔断。
      */
     const val REPEAT_THRESHOLD = 3
@@ -335,6 +386,34 @@ object GuardDecision {
 
     private fun back(reason: String, windowMs: Long) =
         Verdict(Action.BACK, reason, windowMs)
+
+    /**
+     * 判定之后该怎么处置。
+     *
+     * 影子模式的全部约束都收在这一个函数里：**它只可能返回 [Disposition.SHADOW]
+     * 或 [Disposition.NONE]，永远回不到 [Disposition.ACT]**。
+     *
+     * 为什么要把这件事单独写出来、还要测：
+     * 影子模式一旦顺手动了状态（`lastBackAt`、`restoringPkg`、`RepeatGuard`），
+     * 它跑出来的就不是「现行为」而是「现行为 + 影子污染」，拿它当基线定阈值
+     * 等于用错数据做决定。这个项目已经四次栽在「看起来只改了一点点」上。
+     */
+    enum class Disposition {
+        /** 本来就不该拦 */
+        NONE,
+
+        /** 该拦，但开着影子模式：只记录，不动手、不记账 */
+        SHADOW,
+
+        /** 真的动手 */
+        ACT
+    }
+
+    fun disposition(v: Verdict, shadow: Boolean): Disposition = when {
+        !v.shouldBack -> Disposition.NONE
+        shadow -> Disposition.SHADOW
+        else -> Disposition.ACT
+    }
 
     /**
      * 核心判定。

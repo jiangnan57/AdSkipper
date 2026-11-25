@@ -47,6 +47,20 @@ object Prefs {
         get() = sp?.getBoolean("guard_jump", true) ?: true
         set(value) = setBool("guard_jump", value)
 
+    /**
+     * 影子模式：判定照跑，但只记录「本会拦截」，不动手。
+     *
+     * 为什么要它：防跳转现在的判据是**推断**（来源像不像在放广告），
+     * 而对不对只能靠真机数据。可一旦让新判据直接生效，用户就成了小白鼠。
+     * 影子模式让新判据先跑一周，用日志里的 `mode=shadow -> BACK` 算误拦率，
+     * 再决定要不要真的打开。
+     *
+     * 默认关。它不是一个「功能」，是一个测量档位。
+     */
+    var guardShadow: Boolean
+        get() = sp?.getBoolean("guard_shadow", false) ?: false
+        set(value) = setBool("guard_shadow", value)
+
     /** true = 规则库里没有的 App 也用默认关键词尝试跳过 */
     var skipAllApps: Boolean
         get() = sp?.getBoolean("skip_all", true) ?: true

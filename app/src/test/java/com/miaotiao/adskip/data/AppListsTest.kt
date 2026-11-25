@@ -1,5 +1,7 @@
 package com.miaotiao.adskip.data
 
+import com.miaotiao.adskip.data.AppLists.AppRole
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -234,5 +236,89 @@ class AppListsTest {
         } finally {
             AppLists.setRuntimeShellForTest(emptyList())
         }
+    }
+
+    // ================================================================
+    // 角色分类（v1.3.10 · R9）
+    //
+    // 这个项目四次栽在「同一个包挂两份名单，结果取决于 if 顺序」上。
+    // 所以这里不测具体包名，测的是**集合之间的关系**：
+    // 三组语义互斥的角色两两不相交，而且扫描排除名单必须真的由角色派生。
+    // ================================================================
+
+    /** 所有名单里出现过的包，作为「可能存在的包名」全集 */
+    private fun universe(): Set<String> =
+        AppLists.SHELL + AppLists.SYSTEM_UI + AppLists.STORES + AppLists.INERT +
+            AppLists.AD_LANDING + AppLists.CONTENT_APPS + AppLists.USER_DRIVEN +
+            AppLists.AD_PRONE
+
+    @Test
+    fun 三组互斥角色两两不能有交集() {
+        // SHELL ∩ SYSTEM_UI —— 桌面（清空来源）≠ 透明层（保留来源）
+        // SYSTEM_UI ∩ STORE  —— 安装器 ≠ 商店（v1.3.7 那次装不了 APK）
+        // SHELL ∩ STORE       —— 找 App 的地方 ≠ 要去的目的地
+        val pairs = listOf(
+            AppRole.SHELL to AppRole.SYSTEM_UI,
+            AppRole.SYSTEM_UI to AppRole.STORE,
+            AppRole.SHELL to AppRole.STORE
+        )
+        pairs.forEach { (a, b) ->
+            val overlap = universe().filter { AppLists.hasRole(it, a) && AppLists.hasRole(it, b) }
+            assertTrue(
+                "${a} 与 ${b} 语义互斥，不允许重叠，实际重叠：$overlap",
+                overlap.isEmpty()
+            )
+        }
+    }
+
+    @Test
+    fun 扫描排除名单必须由角色派生() {
+        // 第 4 次事故的根因：这份名单只在扫描链里，判定链读不到。
+        // 现在它必须是 SHELL ∪ SYSTEM_UI ∪ INERT，加漏一个都会红。
+        val expected = AppLists.SHELL + AppLists.SYSTEM_UI + AppLists.INERT
+        assertEquals("NEVER_SCAN 只能由角色派生", expected, AppLists.NEVER_SCAN)
+        // 顺带钉住几个曾经各写一份的包
+        listOf(
+            "com.miui.home", // 外壳
+            "com.miui.packageinstaller", // 系统 UI
+            "com.miui.gallery", // 惰性
+            "com.android.systemui" // 透明层
+        ).forEach {
+            assertTrue("$it 不该被扫描", it in AppLists.NEVER_SCAN)
+        }
+    }
+
+    @Test
+    fun 角色查询与单项判断必须一致() {
+        // 新增信号（输入溯源、广告指纹、档位）将来一律走 roles()。
+        // 它和 isXxx 必须是同一个结论，不能各说各话。
+        val samples = mapOf(
+            "com.taobao.taobao" to AppRole.LANDING,
+            "com.xunmeng.pinduoduo" to AppRole.LANDING,
+            "com.dragon.read" to AppRole.CONTENT,
+            "com.ss.android.ugc.aweme" to AppRole.AD_PRONE,
+            "com.android.chrome" to AppRole.BROWSER,
+            "com.xiaomi.market" to AppRole.STORE,
+            "com.miui.home" to AppRole.SHELL,
+            "com.android.packageinstaller" to AppRole.SYSTEM_UI,
+            "com.tencent.mm" to AppRole.USER_DRIVEN,
+            "com.miui.gallery" to AppRole.INERT
+        )
+        samples.forEach { (pkg, role) ->
+            assertTrue("$pkg 应当是 $role", AppLists.hasRole(pkg, role))
+            assertTrue("roles() 必须包含 $role", role in AppLists.roles(pkg))
+        }
+        // 空包名不该被算成任何角色
+        assertTrue(AppLists.roles("").isEmpty())
+    }
+
+    @Test
+    fun 用户自定义名单按包名和子包匹配() {
+        val list = listOf("com.example.ad", "com.foo")
+        assertTrue(AppLists.isUserBlocked("com.example.ad", list))
+        assertTrue("子包也要命中", AppLists.isUserBlocked("com.example.ad.player", list))
+        assertFalse("只是前缀相同、不是子包，不能命中",
+            AppLists.isUserBlocked("com.example.ads", list))
+        assertFalse(AppLists.isUserBlocked("com.other", list))
     }
 }

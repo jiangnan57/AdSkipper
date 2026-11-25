@@ -60,37 +60,12 @@ class SkipAccessibilityService : AccessibilityService() {
             private set
 
         /**
-         * 这些包名永远不扫。
+         * 扫描排除名单已经搬到 `AppLists.NEVER_SCAN`（由角色派生）。
          *
-         * 起因很具体：在系统设置页里，我们自己的无障碍服务描述里就写着
-         * 「自动点击开屏广告的「跳过 / 关闭」按钮」，结果被当成开屏按钮点了一下。
-         * 系统设置、权限弹窗、安装器这类页面本来也没有开屏广告，直接排除最省事。
+         * 以前这里单独维护一份，于是判定链读不到它——「负一屏当来源、
+         * 拼多多连拦 5 次」就是第 4 次同类事故。现在只保留一处：
+         * `AppLists.SHELL ∪ SYSTEM_UI ∪ INERT`。
          */
-        private val NEVER_SCAN = setOf(
-            "com.android.settings",
-            "com.android.permissioncontroller",
-            "com.google.android.permissioncontroller",
-            "com.android.packageinstaller",
-            "com.miui.packageinstaller",
-            "com.miui.securitycenter",
-            "com.android.providers.settings",
-            "com.android.documentsui",
-            "com.android.systemui",
-            // 控制中心 / 通知中心的插件包：下拉一次就发一次窗口事件，
-            // 不排除的话每拉一下都要起一轮扫描（实测 learned_rules 里还学错了控件）
-            "miui.systemui.plugin",
-            // 全局搜索 / 搜索框：长按 Home、上滑搜索都会拉起，
-            // 没有开屏广告，但会频繁发窗口事件
-            "com.android.quicksearchbox",
-            "com.google.android.googlequicksearchbox",
-            "com.miui.globalsearch",
-            "com.miui.personalassistant",
-            "com.miui.home",
-            // 相册 / 文件管理：界面全是「关闭 / 更多 / 分享」，且没有开屏广告
-            "com.miui.gallery",
-            "com.android.documentsui",
-            "com.miui.mediaeditor"
-        )
 
         /**
          * 输入法的兜底名单。
@@ -622,7 +597,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 它们的界面上全是「App 图标 / 卡片」，扫出来的控件没有任何跳过意义，
         // 而且一旦被当成来源 App，「冷启动 + 从没扫到内容页」会让防跳转
         // 把用户从负一屏点开的每个 App 都弹回去（v1.3.8 修的 bug）。
-        return isHome(pkg) || pkg in NEVER_SCAN || pkg in imePackages ||
+        return isHome(pkg) || pkg in AppLists.NEVER_SCAN || pkg in imePackages ||
             pkg in IME_FALLBACK || AppLists.isBrowser(pkg) || AppLists.isShell(pkg)
     }
 
@@ -681,15 +656,19 @@ class SkipAccessibilityService : AccessibilityService() {
 
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (pkg == "com.android.systemui") return
                 // cold 必须在本次事件改写状态**之前**算出来。
                 // onForegroundChanged 末尾会更新 lastPkg / lastAppFgAt，
                 // 提前算就永远是 false，「冷启动」这个信号就废了。
                 val cold = calcCold()
                 // 键盘弹出不是「跳转来源」，让它参与防跳转的时间窗会污染判定
                 if (pkg !in imePackages && pkg !in IME_FALLBACK) {
-                    JumpGuard.onForeground(pkg, cold, this)
+                    // className 也一起传：systemui 的「最近任务 / 通知栏」
+                    // 是用户自己切 App 的地方，要清空来源；而状态栏上弹出的
+                    // 通知不是。两者只能靠类名分开（见 GuardDecision.isUserSurface）。
+                    JumpGuard.onForeground(pkg, cold, this, e.className?.toString())
                 }
+                // systemui 只走上面那次「用户切页」判断，不参与监测与来源维护。
+                if (pkg == "com.android.systemui") return
                 onForegroundChanged(pkg, cold)
             }
 

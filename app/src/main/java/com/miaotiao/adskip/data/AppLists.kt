@@ -9,6 +9,62 @@ package com.miaotiao.adskip.data
 object AppLists {
 
     /**
+     * 一个包在这套工具里的**全部身份**。
+     *
+     * ## 为什么要这一层
+     *
+     * 同一个包在这个项目里已经四次因为「两份名单各说各话、结果取决于 if 顺序」
+     * 出事故：
+     *
+     *   1. v1.3.4 `isBlocked` 提前 return，来源链断掉；
+     *   2. v1.3.4 `contentPage` 统计放在规则命中之后，闸门永久失效；
+     *   3. v1.3.7 安装器被写进 [STORES]，装 APK 必被弹回；
+     *   4. v1.3.8 负一屏在扫描链的排除名单里、判定链却读不到，拼多多被连拦 5 次。
+     *
+     * 这四次的共同点不是「包名写错了」，而是**分类散落在多处**。
+     * 所以统一到 [roles] 一个入口：想知道一个包是什么，只问它。
+     *
+     * ## 允许重叠，但互斥靠断言
+     *
+     * 一个包可以同时是「内容 App」和「广告高发来源」（抖音就是），
+     * 所以 [roles] 返回的是集合。但有几组**语义上互斥**，出现交集一定是写错了：
+     *
+     *   · [SHELL] ∩ [SYSTEM_UI] —— 桌面（清空来源）≠ 透明层（保留来源）
+     *   · [SYSTEM_UI] ∩ [STORE]  —— 安装器 ≠ 商店（第 3 次事故）
+     *   · [SHELL] ∩ [STORE]      —— 找 App 的地方 ≠ 要去的目的地
+     *
+     * 这三条由 `AppListsTest` 断言，不靠代码里的 if 顺序。
+     */
+    enum class AppRole {
+        /** 系统外壳：桌面 / 负一屏 / 控制中心插件 / 语音助手 */
+        SHELL,
+
+        /** 系统 UI 容器：安装器 / 权限弹窗 / 分享面板 / 文件选择器 / 设置 */
+        SYSTEM_UI,
+
+        /** 浏览器 */
+        BROWSER,
+
+        /** 应用商店（唯一「不限来源」的拦截目标） */
+        STORE,
+
+        /** 电商类广告落地页 */
+        LANDING,
+
+        /** 内容型 App（用户点进去就是想看） */
+        CONTENT,
+
+        /** 用户主动打开的 App（微信 / QQ / 支付宝…） */
+        USER_DRIVEN,
+
+        /** 广告跳转高发的来源 */
+        AD_PRONE,
+
+        /** 无开屏广告、界面全是通用控件的系统进程（相册 / 媒体编辑 / 设置存储…） */
+        INERT
+    }
+
+    /**
      * 浏览器。
      *
      * 这类 App 里从来不会有开屏广告，但界面上全是「关闭 ×」「新建标签页 +」这种
@@ -125,6 +181,28 @@ object AppLists {
 
     fun isSystemUi(pkg: String): Boolean =
         pkg in SYSTEM_UI || SYSTEM_UI.any { pkg.startsWith("$it.") }
+
+    /**
+     * 惰性包：不是 App、没有开屏广告、界面上却全是「关闭 / 更多 / 分享」这类
+     * 通用控件——扫它只会误点，防跳转也不需要它参与。
+     *
+     * 这批包原先散在 `SkipAccessibilityService.NEVER_SCAN` 里，只有扫描链读得到。
+     * 收进 [AppLists] 之后，[NEVER_SCAN] 由角色派生，谁都不会漏。
+     *
+     * 注意 `com.android.systemui` 也在这里：它是状态栏 / 导航栏 / 弹窗宿主，
+     * 界面上没有可跳过的广告。但它在防跳转里是**透明层**（保留来源上下文），
+     * 由 `JumpGuard` 单独处理，不走「桌面」那条清空逻辑。
+     */
+    val INERT = setOf(
+        "com.android.systemui",
+        "com.android.providers.settings",
+        // 相册 / 媒体编辑：界面全是「关闭 / 更多 / 分享」，且没有开屏广告
+        "com.miui.gallery",
+        "com.miui.mediaeditor",
+        // 密码管理器：一进去就是自动填充界面，没有任何广告位
+        "com.miui.passwords",
+        "com.google.android.gms.auth.api.phone"
+    )
 
     /**
      * 系统外壳：桌面 / 负一屏 / 控制中心插件 / 全局搜索。
@@ -301,6 +379,64 @@ object AppLists {
         if (runtimeShell.any { pkg.startsWith("$it.") }) return true
         return SHELL_HINTS.any { lower.contains(it) }
     }
+
+    /**
+     * 扫描链的排除名单：**由角色派生，不再单独维护**。
+     *
+     * 它原先写在 `SkipAccessibilityService` 里，判定链读不到——第 4 次事故
+     * （负一屏当来源）就是这么来的。现在它是 [SHELL] ∪ [SYSTEM_UI] ∪ [INERT]
+     * 的并集，往任何一份名单里加东西都会自动同步到这里。
+     *
+     * 最早为什么要排除：系统设置页里，我们自己的无障碍服务描述就写着
+     * 「自动点击开屏广告的『跳过 / 关闭』按钮」，结果被自己的扫描器当成开屏按钮
+     * 点了一下。这类页面本来也没有开屏广告，直接排除最省事。
+     */
+    val NEVER_SCAN: Set<String> = SHELL + SYSTEM_UI + INERT
+
+    /** 角色枚举的固定副本，避免 [roles] 每次调用都克隆一遍数组 */
+    private val ALL_ROLES: List<AppRole> = AppRole.values().toList()
+
+    /**
+     * 一个包的全部角色——**唯一分类入口**。
+     *
+     * 分类本身还是各查各的表（`isShell` / `isStore` …）：它们要处理前缀、
+     * 包名特征、运行时名单，直接复用比在这里重写一遍可靠；而且这些函数
+     * 每次前台事件都会被调几次，不走集合分配。
+     *
+     * 但「这个包是什么」这个问题的答案只有这里给得出。新增信号（输入溯源、
+     * 广告指纹、档位）一律用它，不要再在别处写 `pkg in 某个集合`。
+     */
+    fun roles(pkg: String): Set<AppRole> {
+        if (pkg.isEmpty()) return emptySet()
+        val out = LinkedHashSet<AppRole>(4)
+        ALL_ROLES.forEach { if (hasRole(pkg, it)) out += it }
+        return out
+    }
+
+    /** 这个包是不是具备某个角色。与 [roles] 同源，不会出现两处结论不一致。 */
+    fun hasRole(pkg: String, role: AppRole): Boolean {
+        if (pkg.isEmpty()) return false
+        return when (role) {
+            AppRole.SHELL -> isShell(pkg)
+            AppRole.SYSTEM_UI -> isSystemUi(pkg)
+            AppRole.BROWSER -> isBrowser(pkg)
+            AppRole.STORE -> isStore(pkg)
+            AppRole.LANDING -> isAdLanding(pkg)
+            AppRole.CONTENT -> isContentApp(pkg)
+            AppRole.USER_DRIVEN -> pkg in USER_DRIVEN
+            AppRole.AD_PRONE -> pkg in AD_PRONE
+            AppRole.INERT -> pkg in INERT || INERT.any { pkg.startsWith("$it.") }
+        }
+    }
+
+    /**
+     * 用户在设置里手填的「额外拦截名单」。
+     *
+     * 这不是分类，是**用户配置**——所以它不参与 [roles]。但解析规则要和
+     * 「包名 + 子包」一致，放在这里是为了让「哪些包算命中」只有一种写法。
+     */
+    fun isUserBlocked(pkg: String, list: Collection<String>): Boolean =
+        list.any { pkg == it || pkg.startsWith("$it.") }
 
     /**
      * 「用户自己点开的 App」。

@@ -686,4 +686,112 @@ class GuardDecisionTest {
         assertFalse(g.noteBack(meituan, t0 + 3_000L))
         assertFalse("中间被打断过，要重新数到三次", g.isMuted(meituan, t0 + 4_000L))
     }
+
+    // ================================================================
+    // 七、systemui：透明层，但「最近任务 / 通知栏」是用户切页的地方（v1.3.10 · R1）
+    //
+    // 旧代码 `pkg == "com.android.systemui"` 直接 return，来源上下文原样留着。
+    // 于是「在番茄小说里按最近任务 → 点淘宝」会被判成
+    // 「番茄还在开屏、用户 1 秒后就到了淘宝」→ 弹回。
+    // 判据只能靠类名：状态栏上的通知（heads-up）绝不能算用户切页，
+    // 否则正在播广告时来一条通知，来源就被清空 → 该拦的不拦。
+    // ================================================================
+
+    @Test
+    fun 最近任务界面算用户切页() {
+        assertTrue(
+            GuardDecision.isUserSurface("com.android.systemui.recents.RecentsActivity")
+        )
+        // 各家 ROM 叫法不同，overview 也常见
+        assertTrue(GuardDecision.isUserSurface("com.miui.recents.OverviewActivity"))
+    }
+
+    @Test
+    fun 下拉通知栏算用户切页() {
+        assertTrue(
+            GuardDecision.isUserSurface(
+                "com.android.systemui.shade.NotificationShadeWindowView"
+            )
+        )
+        assertTrue(
+            GuardDecision.isUserSurface("com.android.systemui.qs.QSContainerImpl")
+        )
+    }
+
+    @Test
+    fun 弹出通知不算用户切页() {
+        // heads-up 经常在别的 App 放着广告时出现（音乐控制、下载完成）。
+        // 把它当成「用户切页」会把正在播广告的来源清掉 → 漏拦。
+        assertFalse(
+            GuardDecision.isUserSurface(
+                "com.android.systemui.statusbar.phone.HeadsUpNotificationView"
+            )
+        )
+    }
+
+    @Test
+    fun 状态栏本身不算用户切页() {
+        // 这条是刻意与报告不同的地方：报告把 statusbar 写进了正向名单，
+        // 但 heads-up 通知的容器就住在 statusbar 包里，正向匹配会把
+        // `StatusBarWindowView` 也当成用户切页。宁可不认，也不能误清来源。
+        assertFalse(
+            GuardDecision.isUserSurface("com.android.systemui.statusbar.phone.StatusBar")
+        )
+    }
+
+    @Test
+    fun 拿不到类名时保持旧行为() {
+        // 轮询路径没有 className。这时宁可什么都不做（保持 v1.3.9 行为），
+        // 也不要基于猜测清空来源。
+        assertFalse(GuardDecision.isUserSurface(null))
+        assertFalse(GuardDecision.isUserSurface(""))
+    }
+
+    @Test
+    fun 回滚开关存在() {
+        // 真机上出问题时要能一行改回去，所以这个常量必须是真的能被关掉
+        assertTrue(
+            "保留这个常量是为了回滚，不能删",
+            GuardDecision.GUARD_SYSTEMUI_AS_USER_SURFACE
+        )
+    }
+
+    // ================================================================
+    // 八、影子模式（v1.3.10 · R2）
+    //
+    // 影子模式的唯一要求：判定照跑，但**绝不动手**。
+    // 一旦它顺手动了 lastBackAt / restoringPkg / RepeatGuard，
+    // 跑出来的就不是「现行为」，拿它当基线定阈值等于用错数据。
+    // ================================================================
+
+    @Test
+    fun 影子模式下该拦也只记录() {
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 5_000L)
+        assertEquals("前提：这条判定本来该拦", GuardDecision.Action.BACK, v.action)
+        assertEquals(
+            "影子模式下只能记录，不能动手",
+            GuardDecision.Disposition.SHADOW,
+            GuardDecision.disposition(v, shadow = true)
+        )
+        assertTrue(
+            "影子模式绝不能映射到 ACT",
+            GuardDecision.disposition(v, shadow = true) != GuardDecision.Disposition.ACT
+        )
+    }
+
+    @Test
+    fun 正常模式下该拦就动手() {
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 5_000L)
+        assertEquals(
+            GuardDecision.Disposition.ACT,
+            GuardDecision.disposition(v, shadow = false)
+        )
+    }
+
+    @Test
+    fun 不该拦时影子模式也无事可做() {
+        val v = judge(dest = alipay, origin = wakeup, dtMs = 800L)
+        assertEquals(GuardDecision.Disposition.NONE, GuardDecision.disposition(v, false))
+        assertEquals(GuardDecision.Disposition.NONE, GuardDecision.disposition(v, true))
+    }
 }
