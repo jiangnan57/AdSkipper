@@ -299,6 +299,24 @@ object GuardDecision {
             return true
         }
 
+        /**
+         * 直接熔断某个目的地。
+         *
+         * 与 [noteBack] 的区别：那是**推断**（连着拦了三次 = 用户想去），
+         * 这是**用户明确表态**（他点了「撤销」）。所以时长由调用方给，
+         * 通常远长于 [REPEAT_MUTE_MS]。
+         */
+        @Synchronized
+        fun mute(dest: String, now: Long, ms: Long = muteMs) {
+            if (dest.isEmpty()) return
+            mutedPkg = dest
+            mutedUntil = now + ms
+            // 计数清零：熔断到期后重新开始数，不能一到期就立刻又熔断一轮
+            streakPkg = null
+            streakStart = 0L
+            streakCount = 0
+        }
+
         /** 单元测试用：清空全部状态 */
         @Synchronized
         fun clear() {

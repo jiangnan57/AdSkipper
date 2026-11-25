@@ -86,6 +86,12 @@
             </intent-filter>
         </receiver>
 
+        <!-- 拦截提示上的「撤销 / 不再提示」。只由本应用的 PendingIntent 触发，
+             所以 exported=false 就够；不需要任何权限。 -->
+        <receiver
+            android:name=".service.UndoReceiver"
+            android:exported="false" />
+
     </application>
 
 </manifest>

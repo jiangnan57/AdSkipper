@@ -465,6 +465,25 @@ object JumpGuard {
         // 只记「真的动了手」的那几次。影子模式走不到这里。
         InterceptLedger.record(pkg, origin, now)
         SkipLog.add("拦截跳转 ${pkg.substringAfterLast('.')}：${verdict.reason}")
+        // 给用户一个出口：判错了可以点「撤销」，比再点一次 App 有用。
+        GuardNotice.show(service, pkg, origin, verdict.reason)
+    }
+
+    /**
+     * 用户点了「撤销」：这个目的地一段时间内不再拦。
+     *
+     * 为什么不复用 [repeatGuard] 的阈值逻辑：那是「连拦三次」的推断，
+     * 而撤销是用户**明确表态**。两者长度差一个量级（5 分钟 vs 30 分钟），
+     * 混在一起会让「撤销」看起来没生效。
+     */
+    @Synchronized
+    fun muteFor(pkg: String, durationMs: Long) {
+        val now = SystemClock.uptimeMillis()
+        repeatGuard.mute(pkg, now, durationMs)
+        android.util.Log.d(
+            "AdSkip",
+            "guard undo-mute pkg=$pkg duration=${durationMs / 1000}s"
+        )
     }
 
     /**

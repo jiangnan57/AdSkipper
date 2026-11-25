@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swPopup: MaterialSwitch
     private lateinit var swGuard: MaterialSwitch
     private lateinit var swShadow: MaterialSwitch
+    private lateinit var swNotice: MaterialSwitch
     private lateinit var swAllApps: MaterialSwitch
     private lateinit var swLearn: MaterialSwitch
 
@@ -75,6 +76,7 @@ class MainActivity : AppCompatActivity() {
         swPopup = findViewById(R.id.swPopup)
         swGuard = findViewById(R.id.swGuard)
         swShadow = findViewById(R.id.swShadow)
+        swNotice = findViewById(R.id.swNotice)
         swAllApps = findViewById(R.id.swAllApps)
         swLearn = findViewById(R.id.swLearn)
 
@@ -278,6 +280,7 @@ class MainActivity : AppCompatActivity() {
         swPopup.isChecked = Prefs.closePopups
         swGuard.isChecked = Prefs.guardJump
         swShadow.isChecked = Prefs.guardShadow
+        swNotice.isChecked = Prefs.guardNotice
         swAllApps.isChecked = Prefs.skipAllApps
         swLearn.isChecked = Prefs.autoLearn
 
@@ -296,6 +299,7 @@ class MainActivity : AppCompatActivity() {
             true
         }
         swShadow.setOnCheckedChangeListener { _, v -> Prefs.guardShadow = v }
+        swNotice.setOnCheckedChangeListener { _, v -> Prefs.guardNotice = v }
         swAllApps.setOnCheckedChangeListener { _, v -> Prefs.skipAllApps = v }
         swLearn.setOnCheckedChangeListener { _, v -> Prefs.autoLearn = v }
         swLearn.setOnLongClickListener {
@@ -315,6 +319,11 @@ class MainActivity : AppCompatActivity() {
         refreshStatus()
         renderSyncStatus()
         autoSyncIfDue()
+        // 用户可能刚从通知栏点了「不再提示」回来，开关状态要跟着刷新。
+        // 先比较再赋值，避免一次无意义的写盘。
+        if (::swNotice.isInitialized && swNotice.isChecked != Prefs.guardNotice) {
+            swNotice.isChecked = Prefs.guardNotice
+        }
         // 用户很可能是刚从系统设置里授予悬浮窗权限回来的：
         // 微窗只在 onServiceConnected 挂一次，这里立刻让它补挂，不用等重启服务
         SkipAccessibilityService.instance?.retryGhostWindow()

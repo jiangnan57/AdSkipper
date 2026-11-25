@@ -61,6 +61,18 @@ object Prefs {
         get() = sp?.getBoolean("guard_shadow", false) ?: false
         set(value) = setBool("guard_shadow", value)
 
+    /**
+     * 拦截后是否弹一条「已拦截，可撤销」的提示。
+     *
+     * 默认开。它是防跳转判错时用户唯一的出口——没有它，判错的代价就是
+     * 「App 打不开」，用户只能反复点、反复被弹。
+     *
+     * 关掉它不影响防跳转本身，只是少了撤销入口。
+     */
+    var guardNotice: Boolean
+        get() = sp?.getBoolean("guard_notice", true) ?: true
+        set(value) = setBool("guard_notice", value)
+
     /** true = 规则库里没有的 App 也用默认关键词尝试跳过 */
     var skipAllApps: Boolean
         get() = sp?.getBoolean("skip_all", true) ?: true

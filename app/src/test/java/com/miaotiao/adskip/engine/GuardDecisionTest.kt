@@ -794,4 +794,43 @@ class GuardDecisionTest {
         assertEquals(GuardDecision.Disposition.NONE, GuardDecision.disposition(v, false))
         assertEquals(GuardDecision.Disposition.NONE, GuardDecision.disposition(v, true))
     }
+
+    // ================================================================
+    // 九、撤销（v1.3.11 · R3）
+    //
+    // 「连拦三次」是推断，「用户点了撤销」是表态。后者必须明显更硬：
+    // 30 分钟内不再拦同一个目的地，而且只影响那一个。
+    // ================================================================
+
+    @Test
+    fun 撤销后三十分钟内不再拦同一个目的地() {
+        val g = GuardDecision.RepeatGuard()
+        val t0 = 10_000L
+        g.mute(meituan, t0, 30 * 60_000L)
+        assertTrue("刚撤销就要放行", g.isMuted(meituan, t0 + 1_000L))
+        assertTrue("29 分钟内都放行", g.isMuted(meituan, t0 + 29 * 60_000L))
+        assertTrue(g.muteLeftMs(meituan, t0 + 1_000L) > 0L)
+        assertFalse(
+            "30 分钟过了要恢复拦截，否则撤销等于永久关闭",
+            g.isMuted(meituan, t0 + 30 * 60_000L + 1_000L)
+        )
+    }
+
+    @Test
+    fun 撤销只影响那一个目的地() {
+        val g = GuardDecision.RepeatGuard()
+        val t0 = 10_000L
+        g.mute(meituan, t0, 30 * 60_000L)
+        assertFalse("别的地儿该拦还得拦", g.isMuted(taobao, t0 + 1_000L))
+    }
+
+    @Test
+    fun 撤销比自动熔断长得多() {
+        // 自动熔断是「被拦三次」的推断，5 分钟；撤销是明确表态，30 分钟。
+        // 如果两者差不多长，用户会觉得「撤销了但没生效」。
+        assertTrue(
+            "撤销时长必须明显长于自动熔断",
+            30 * 60_000L >= GuardDecision.REPEAT_MUTE_MS * 3
+        )
+    }
 }
