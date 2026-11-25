@@ -40,6 +40,26 @@
 
 
     <string name="btn_rules">规则管理</string>
-    <string name="section_log">最近记录</string>
+    <string name="section_log">运行记录</string>
     <string name="title_rules">规则管理</string>
+
+    <!-- 运行记录页 -->
+    <string name="title_log">运行记录</string>
+    <string name="btn_export">导出</string>
+    <string name="log_empty">还没有记录</string>
+    <string name="log_today">今天</string>
+    <string name="log_yesterday">昨天</string>
+    <string name="log_skip">开屏广告已跳过</string>
+    <string name="log_popup">已关闭弹窗</string>
+    <string name="log_guard">拦截跳转，已返回</string>
+    <string name="log_miss">没认出跳过按钮</string>
+    <string name="log_system">系统提醒</string>
+
+    <!-- 首页状态卡 -->
+    <string name="hero_today">今日已跳过</string>
+    <string name="hero_fix">去修复</string>
+    <string name="hero_reopen">重新开启</string>
+    <string name="hero_need_step">还需要 1 步</string>
+    <string name="hero_ok_sub">后台保护正常</string>
+    <string name="hero_off">广告不会被跳过</string>
 </resources>

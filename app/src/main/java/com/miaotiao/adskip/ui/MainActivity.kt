@@ -28,30 +28,59 @@ import com.miaotiao.adskip.service.JumpGuard
 import com.miaotiao.adskip.service.KeepAliveService
 import com.miaotiao.adskip.service.SkipAccessibilityService
 import com.miaotiao.adskip.util.AccessUtil
+import com.miaotiao.adskip.util.LogExport
 import com.miaotiao.adskip.util.SkipLog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * 首页。
+ *
+ * 这一屏的排序原则：**先回答「现在有没有在保护我」，再回答「今天省了几次」，
+ * 最后才是开关和入口。**
+ *
+ * v1.7.0 重做之前是反的：状态卡用 15sp 灰字、开关四行、规则按钮、10 行等宽日志，
+ * 视觉重量几乎一样，眼睛没有落点；而且「通知权限没开」这种关键问题被塞进
+ * 一行 12sp 小字里，还长到要换行。
+ *
+ * 现在：状态卡置顶（大数字 + 一句话 + 三个权限点），日志搬到 LogActivity。
+ */
 class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_NOTIFY = 1001
+
+        /** 状态卡的三种配色：正常 / 需要处理 / 未开启 */
+        private const val STYLE_OK = 0
+        private const val STYLE_WARN = 1
+        private const val STYLE_OFF = 2
     }
 
     private lateinit var tvStatus: TextView
     private lateinit var tvSubStatus: TextView
+    private lateinit var tvTodayNum: TextView
     private lateinit var dotStatus: View
-    private lateinit var tvLog: TextView
-    private lateinit var btnGrant: MaterialButton
+    private lateinit var heroCard: View
+    private lateinit var todayBox: View
+    private lateinit var btnFix: MaterialButton
+
+    private lateinit var dotNotify: View
+    private lateinit var dotOverlay: View
+    private lateinit var dotBattery: View
 
     private lateinit var swMaster: MaterialSwitch
     private lateinit var swSplash: MaterialSwitch
     private lateinit var swPopup: MaterialSwitch
     private lateinit var swGuard: MaterialSwitch
 
+    private lateinit var rowSplash: View
+    private lateinit var rowPopup: View
+    private lateinit var rowGuard: View
 
-    private val logListener: () -> Unit = { renderLog() }
+    private lateinit var tvLogSub: TextView
+
+    private val logListener: () -> Unit = { renderLogSub() }
 
     /** 防止 onResume 反复触发自动同步 */
     private var syncing = false
@@ -62,82 +91,73 @@ class MainActivity : AppCompatActivity() {
 
         tvStatus = findViewById(R.id.tvStatus)
         tvSubStatus = findViewById(R.id.tvSubStatus)
+        tvTodayNum = findViewById(R.id.tvTodayNum)
         dotStatus = findViewById(R.id.dotStatus)
-        tvLog = findViewById(R.id.tvLog)
+        heroCard = findViewById(R.id.heroCard)
+        todayBox = findViewById(R.id.todayBox)
+        btnFix = findViewById(R.id.btnFix)
+        tvLogSub = findViewById(R.id.tvLogSub)
+
+        dotNotify = findViewById(R.id.dotNotify)
+        dotOverlay = findViewById(R.id.dotOverlay)
+        dotBattery = findViewById(R.id.dotBattery)
 
         swMaster = findViewById(R.id.swMaster)
         swSplash = findViewById(R.id.swSplash)
         swPopup = findViewById(R.id.swPopup)
         swGuard = findViewById(R.id.swGuard)
 
+        rowSplash = findViewById(R.id.rowSplash)
+        rowPopup = findViewById(R.id.rowPopup)
+        rowGuard = findViewById(R.id.rowGuard)
+
+        findViewById<TextView>(R.id.tvVersion).text = "v" + BuildConfig.VERSION_NAME
+
         // 远程规则地址仍然生效（预置/深链导入），但不再占界面：
         // 普通用户没有「规则源」这个概念，一个输入框 + 两个按钮只会让他犹豫。
 
         bindSwitches()
 
-        findViewById<MaterialButton>(R.id.btnGrant).setOnClickListener {
-            runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        btnFix.setOnClickListener {
+            if (!AccessUtil.isServiceEnabled(this)) openAccessibilitySettings()
+            else fixFirstIssue()
         }
-        btnGrant = findViewById(R.id.btnGrant)
+
         // 自检/探测器不再放在界面上：对普通用户它只是一排看不懂的按钮。
         // 需要排查时，长按标题 1.5 秒即可进来，能力一点没少。
         findViewById<TextView>(R.id.tvAppName).setOnLongClickListener {
             toggleInspector()
             true
         }
-        findViewById<MaterialButton>(R.id.btnRules).apply {
+
+        findViewById<View>(R.id.rowRules).apply {
             setOnClickListener { startActivity(Intent(this@MainActivity, RulesActivity::class.java)) }
             // 长按看「自动学习」攒下的记录，原来是挂在自动学习开关上的。
-            // 开关收掉了，能力挪到这里，位置更合理：它本来就是个规则相关的东西。
             setOnLongClickListener {
                 showLearnedDialog()
                 true
             }
         }
-        findViewById<TextView>(R.id.tvClearLog).apply {
-            setOnClickListener { SkipLog.clear() }
-            // 长按导出：用户报「莫名其妙被弹回去」时，能直接把记录发出来。
-            // 之前只能靠 adb logcat，而这类问题往往过去几小时后才反馈，
-            // 那时 logcat 环形缓冲早就滚掉了（HyperOS 上甚至会被整段清空）。
-            setOnLongClickListener { exportLog(); true }
+
+        findViewById<View>(R.id.rowLog).apply {
+            setOnClickListener { startActivity(Intent(this@MainActivity, LogActivity::class.java)) }
+            // 长按直接导出：用户报「莫名其妙被弹回去」时，能一步把记录发出来。
+            setOnLongClickListener {
+                LogExport.share(this@MainActivity)
+                true
+            }
         }
-        // 状态副标题本身就是「保活问题」的修复入口：点一下就去对应的系统开关
-        tvSubStatus.setOnClickListener { fixKeepAlive() }
+
+        // 副标题本身就是「保活问题」的入口：点一下按当前缺什么去补什么
+        tvSubStatus.setOnClickListener { onSubStatusClick() }
+
+        // 三个权限点各自可点，缺哪个点哪个，不用在一次弹窗里连跳三步
+        findViewById<View>(R.id.pillNotify).setOnClickListener { fixNotify() }
+        findViewById<View>(R.id.pillOverlay).setOnClickListener { fixOverlay() }
+        findViewById<View>(R.id.pillBattery).setOnClickListener { fixBattery() }
 
         ensureNotifyPermission()
         handleDeepLink(intent)
-    }
-
-    // ------------------------------------------------------------------ 导出记录
-
-    /**
-     * 把「最近记录」通过系统分享发出去。
-     *
-     * 记录会同时落盘到 `filesDir/skiplog.txt`（见 [SkipLog]），所以进程被杀、
-     * 手机重启之后仍然在——这正是排「莫名其妙被弹回去」最需要的东西：
-     * 用户反馈的时候，现场往往已经过去几个小时，logcat 早就滚没了。
-     *
-     * 走 ACTION_SEND 而不是写文件到外部存储：不用申请存储权限，
-     * 用户想发到哪就发到哪（微信、邮件、备忘录都行）。
-     */
-    private fun exportLog() {
-        val lines = SkipLog.snapshot()
-        if (lines.isEmpty()) {
-            toast("还没有记录")
-            return
-        }
-        val text = buildString {
-            append("秒跳 v").append(BuildConfig.VERSION_NAME).append(" 记录（最新在上，共 ")
-            append(lines.size).append(" 条）\n\n")
-            lines.forEach { append(it).append('\n') }
-        }
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "秒跳运行记录")
-            putExtra(Intent.EXTRA_TEXT, text)
-        }
-        runCatching { startActivity(Intent.createChooser(send, "导出记录")) }
-            .onFailure { toast("没有可用的分享应用") }
     }
 
     // ------------------------------------------------------------------ 保活 / 被系统冻结
@@ -165,55 +185,99 @@ class MainActivity : AppCompatActivity() {
 
     private fun ensureNotifyPermission() {
         if (notifyGranted()) return
+        requestNotify()
+    }
+
+    private fun requestNotify() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         runCatching {
-            requestPermissions(
-                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
-                REQ_NOTIFY
-            )
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
         }
     }
 
-    private fun fixKeepAlive() {
-        if (!notifyGranted()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    private fun openAccessibilitySettings() {
+        runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+    }
+
+    /** 按「最要紧的那一项」给出修复动作，顺序与状态卡文案保持一致 */
+    private fun fixFirstIssue() {
+        when {
+            !notifyGranted() -> {
+                requestNotify()
+            }
+
+            !AccessUtil.canDrawOverlay(this) -> {
                 runCatching {
-                    requestPermissions(
-                        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
-                        REQ_NOTIFY
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        )
                     )
                 }
+                toast("开启「显示在其他应用上层」后返回，识别才稳定")
             }
+
+            !batteryWhitelisted() -> skipBatteryOptimization()
+
+            else -> showHyperOsTips()
+        }
+    }
+
+    private fun fixNotify() {
+        if (notifyGranted()) {
+            toast("通知权限已开启")
             return
         }
-        if (!AccessUtil.canDrawOverlay(this)) {
+        requestNotify()
+    }
+
+    private fun fixOverlay() {
+        if (AccessUtil.canDrawOverlay(this)) {
+            toast("悬浮窗权限已开启")
+            return
+        }
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        }
+        toast("开启「显示在其他应用上层」后返回，识别才稳定")
+    }
+
+    private fun fixBattery() {
+        if (batteryWhitelisted()) {
+            toast("已在电池白名单里")
+            return
+        }
+        skipBatteryOptimization()
+    }
+
+    private fun skipBatteryOptimization() {
+        val ok = runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        }.isSuccess
+        if (!ok) {
             runCatching {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                )
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
             }
-            toast("开启「显示在其他应用上层」后返回，识别才稳定")
-            return
+            toast("请手动找到「秒跳」，选择「不限制」")
         }
-        if (!batteryWhitelisted()) {
-            val ok = runCatching {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:$packageName")
-                    )
-                )
-            }.isSuccess
-            if (!ok) {
-                runCatching {
-                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                }
-            }
-            return
-        }
-        // 两项都正常：顺手提醒小米自家的两个开关，这个 App 读不到也改不了
+    }
+
+    /**
+     * 两项权限都正常还出问题，多半是小米自家的省电策略 / 自启动。
+     * 这个 App 读不到也改不了，只能把路径写清楚让用户自己去关。
+     */
+    private fun showHyperOsTips() {
         AlertDialog.Builder(this)
             .setTitle("再检查两个系统开关")
             .setMessage(
@@ -225,6 +289,16 @@ class MainActivity : AppCompatActivity() {
             )
             .setPositiveButton("知道了", null)
             .show()
+    }
+
+    private fun onSubStatusClick() {
+        val on = AccessUtil.isServiceEnabled(this)
+        if (!on) {
+            openAccessibilitySettings()
+            return
+        }
+        val healthy = notifyGranted() && AccessUtil.canDrawOverlay(this) && batteryWhitelisted()
+        if (healthy) showHyperOsTips() else fixFirstIssue()
     }
 
     override fun onRequestPermissionsResult(
@@ -271,10 +345,13 @@ class MainActivity : AppCompatActivity() {
         swSplash.isChecked = Prefs.skipSplash
         swPopup.isChecked = Prefs.closePopups
         swGuard.isChecked = Prefs.guardJump
+        applyMasterDim(Prefs.masterEnabled)
 
         swMaster.setOnCheckedChangeListener { _, v ->
             Prefs.masterEnabled = v
+            applyMasterDim(v)
             if (!v) JumpGuard.reset()
+            refreshStatus()
         }
         swSplash.setOnCheckedChangeListener { _, v -> Prefs.skipSplash = v }
         swPopup.setOnCheckedChangeListener { _, v -> Prefs.closePopups = v }
@@ -288,10 +365,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 总开关关掉时，下面三项一起变淡并失能。
+     *
+     * 光把开关挪到「关」不够——三个子开关还亮着，用户会以为它们仍在工作。
+     * 视觉上一起沉下去，「暂停」才是真的暂停。
+     */
+    private fun applyMasterDim(master: Boolean) {
+        val alpha = if (master) 1f else 0.42f
+        listOf(rowSplash, rowPopup, rowGuard).forEach {
+            it.alpha = alpha
+            it.isEnabled = master
+        }
+        listOf(swSplash, swPopup, swGuard).forEach { it.isEnabled = master }
+    }
+
     override fun onStart() {
         super.onStart()
         SkipLog.observe(logListener)
-        renderLog()
+        renderLogSub()
     }
 
     override fun onResume() {
@@ -308,60 +400,136 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    // ------------------------------------------------------------------ 状态渲染
+
     private fun refreshStatus() {
         val on = AccessUtil.isServiceEnabled(this)
         // 服务活着就把「丢失」标记清掉；被撤销时保留标记，给出明确原因
         if (on) Prefs.clearServiceLost()
 
         val lost = !on && Prefs.serviceLost
+        val master = Prefs.masterEnabled
 
         // 浏览器「无障碍开着但什么都不跳」的真正原因往往不是无障碍本身，
         // 而是进程被系统冻结（见 KeepAliveService 里通知重要度的注释）。
-        // 这两个开关没搞定，无障碍开着也是白开，所以优先级排在「已开启」前面。
         val notifyOk = notifyGranted()
         val overlayOk = AccessUtil.canDrawOverlay(this)
         val batteryOk = batteryWhitelisted()
-        val keepAliveOk = notifyOk && overlayOk && batteryOk
+        val healthy = on && notifyOk && overlayOk && batteryOk
 
-        tvStatus.text = when {
-            on -> getString(R.string.status_on)
-            lost -> getString(R.string.service_lost_hint)
-            else -> getString(R.string.status_off)
-        }
-        tvSubStatus.text = when {
-            on && !notifyOk -> "⚠ 通知权限未开 → 后台会被系统冻结，广告跳不过（点这里修）"
-            on && !overlayOk -> "⚠ 悬浮窗权限未开 → 后台识别会失效（点这里修）"
-            on && !batteryOk -> "⚠ 未加入电池白名单 → 切走一分钟就可能失效（点这里修）"
-            on -> "今日已跳过 ${Prefs.todaySkipCount()} 次"
-            lost -> "点右侧按钮重新开启无障碍即可恢复"
-            else -> "需要在系统设置里手动授权"
+        // 文案优先级：总开关 > 无障碍 > 三项后台权限 > 正常。
+        // 一次只让用户处理一件事，别把四个问题一起糊在脸上。
+        var state = getString(R.string.hero_need_step)
+        var sub = ""
+        var style = STYLE_WARN
+        var fixText = getString(R.string.hero_fix)
+        var needFix = true
+
+        when {
+            !master -> {
+                state = "总开关已关闭"
+                sub = "所有功能都已暂停，广告不会被跳过"
+                style = STYLE_OFF
+                needFix = false
+            }
+
+            !on && lost -> {
+                state = "无障碍被系统关闭"
+                sub = "常见原因是清理了后台"
+                style = STYLE_WARN
+                fixText = getString(R.string.hero_reopen)
+            }
+
+            !on -> {
+                state = "无障碍没有开启"
+                sub = "需要在系统设置里授权一次"
+                style = STYLE_OFF
+                fixText = "去开启"
+            }
+
+            !notifyOk -> {
+                state = getString(R.string.hero_need_step)
+                sub = "通知权限被关，后台会被冻结"
+            }
+
+            !overlayOk -> {
+                state = getString(R.string.hero_need_step)
+                sub = "悬浮窗权限没开，后台识别会失效"
+            }
+
+            !batteryOk -> {
+                state = getString(R.string.hero_need_step)
+                sub = "没进电池白名单，切走一分钟就可能失效"
+            }
+
+            else -> {
+                state = getString(R.string.status_on)
+                sub = getString(R.string.hero_ok_sub)
+                style = STYLE_OK
+                needFix = false
+            }
         }
 
-        val dot = GradientDrawable()
-        dot.shape = GradientDrawable.OVAL
-        val healthy = on && keepAliveOk
-        dot.setColor(ContextCompat.getColor(this, if (healthy) R.color.ok else R.color.warn))
-        dotStatus.background = dot
+        tvStatus.text = state
+        tvSubStatus.text = sub
+        tvStatus.setTextColor(
+            ContextCompat.getColor(
+                this,
+                when (style) {
+                    STYLE_OK -> R.color.ok_text
+                    STYLE_WARN -> R.color.warn_text
+                    else -> R.color.text_secondary
+                }
+            )
+        )
+        heroCard.setBackgroundResource(
+            when (style) {
+                STYLE_OK -> R.drawable.bg_hero_ok
+                STYLE_WARN -> R.drawable.bg_hero_warn
+                else -> R.drawable.bg_hero_off
+            }
+        )
+        setDot(dotStatus, if (style == STYLE_OK) R.color.ok else if (style == STYLE_WARN) R.color.warn else R.color.text_tertiary)
 
-        // 按钮在服务正常时隐藏，异常时高亮引导
-        btnGrant.visibility = if (on) View.GONE else View.VISIBLE
-        if (!on && lost) {
-            btnGrant.setBackgroundColor(ContextCompat.getColor(this, R.color.warn))
-        }
+        // 数字和修复按钮二选一：坏了就先修，别让「今天跳了 12 次」分散注意力
+        tvTodayNum.text = Prefs.todaySkipCount().toString()
+        todayBox.visibility = if (needFix) View.GONE else View.VISIBLE
+        btnFix.visibility = if (needFix) View.VISIBLE else View.GONE
+        btnFix.text = fixText
+        btnFix.setBackgroundTintList(
+            ContextCompat.getColorStateList(
+                this,
+                if (!on) R.color.brand else R.color.warn
+            )
+        )
+
+        bindPill(dotNotify, notifyOk)
+        bindPill(dotOverlay, overlayOk)
+        bindPill(dotBattery, batteryOk)
+
+        renderLogSub()
     }
 
-    private fun renderLog() {
-        if (!::tvLog.isInitialized) return
-        runOnUiThread {
-            // 只显示「和用户有关」的记录。
-            // 「规则已加载 50 个应用」「无障碍服务已连接」是启动噪音，
-            // 每次重连都会刷一条，把真正有用的（跳过 / 拦截 / 没找到按钮）
-            // 全挤到看不见的地方。数据本身不丢，导出时仍然是完整的。
-            val list = SkipLog.snapshot().filterNot {
-                it.contains("规则已加载") || it.contains("无障碍服务已连接")
-            }
-            tvLog.text = if (list.isEmpty()) "暂无记录" else list.joinToString("\n")
+    private fun bindPill(dot: View, ok: Boolean) {
+        setDot(dot, if (ok) R.color.ok else R.color.warn)
+    }
+
+    /** fail-safe 于「今天跳过几次」这种每天的副标题，不需要精确到每一条 */
+    private fun renderLogSub() {
+        if (!::tvLogSub.isInitialized) return
+        val today = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date())
+        val n = SkipLog.snapshot().count {
+            it.length > 5 && it.startsWith(today) &&
+                !it.contains("规则已加载") && !it.contains("无障碍服务已连接")
         }
+        tvLogSub.text = if (n > 0) "今天 $n 条 · 点开看明细" else "看它今天做了什么"
+    }
+
+    private fun setDot(view: View, colorRes: Int) {
+        val d = GradientDrawable()
+        d.shape = GradientDrawable.OVAL
+        d.setColor(ContextCompat.getColor(this, colorRes))
+        view.background = d
     }
 
     // ------------------------------------------------------------------ 远程规则
@@ -422,7 +590,7 @@ class MainActivity : AppCompatActivity() {
         toast("蓝色小球已显示：切到目标 App，点它就能自检")
     }
 
-    /** 长按「自动学习」开关：查看 / 清空已经学到的规则 */
+    /** 长按「规则管理」：查看 / 清空已经学到的规则 */
     private fun showLearnedDialog() {
         val count = LearnStore.learnedAppCount()
         AlertDialog.Builder(this)

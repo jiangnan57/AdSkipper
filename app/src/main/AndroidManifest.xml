@@ -49,6 +49,11 @@
             android:exported="false"
             android:label="@string/title_rules" />
 
+        <activity
+            android:name=".ui.LogActivity"
+            android:exported="false"
+            android:label="@string/title_log" />
+
         <service
             android:name=".service.SkipAccessibilityService"
             android:exported="true"

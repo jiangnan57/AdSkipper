@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 记录列表按「天」分组，一组是一张白卡。
+     ListView 里没法给整组套一个背景，所以用四个圆角变体拼：
+     组首、组中、组尾、单条。颜色和首页卡片一致，不加描边——
+     描边会在组内每一行的接缝处多画一条横线，和分隔线打架。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners
+        android:topLeftRadius="16dp"
+        android:topRightRadius="16dp" />
+    <solid android:color="@color/card" />
+</shape>

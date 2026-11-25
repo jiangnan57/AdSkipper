@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 首屏状态卡的浅绿底：左上偏绿、右下渐到白，比纯色块更像「有光」。
+     用 drawable 而不是 MaterialCardView 的 cardBackgroundColor，是因为
+     MaterialCard 的 background 是它自己画的，设渐变会被覆盖掉。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="20dp" />
+    <gradient
+        android:angle="315"
+        android:endColor="#FFFFFF"
+        android:startColor="#F1F8F3" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/hero_stroke_ok" />
+</shape>

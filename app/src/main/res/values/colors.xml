@@ -2,12 +2,27 @@
 <resources>
     <color name="brand">#1E6FE0</color>
     <color name="brand_dark">#1557B0</color>
+    <color name="brand_soft">#EEF4FE</color>
     <color name="bg">#F6F7F9</color>
     <color name="card">#FFFFFF</color>
-    <color name="text_primary">#1A1A1A</color>
+    <color name="text_primary">#14161A</color>
     <color name="text_secondary">#6B7280</color>
-    <color name="divider">#E5E7EB</color>
+    <!-- 第三级文字：副标题、单位、说明。比 text_secondary 更淡一档，
+         用来把「标题 / 说明 / 装饰」拉开层次，否则一屏全是同级灰字。 -->
+    <color name="text_tertiary">#A2A9B4</color>
+    <color name="divider">#E9EBEF</color>
+    <color name="line_soft">#F0F2F5</color>
     <color name="ok">#16A34A</color>
-    <color name="warn">#D97706</color>
+    <color name="ok_soft">#EAF7EF</color>
+    <color name="ok_text">#12603A</color>
+    <color name="warn">#C2760A</color>
+    <color name="warn_soft">#FFF8EA</color>
+    <color name="warn_text">#9A5B06</color>
+    <color name="hero_stroke_ok">#DCEFE3</color>
+    <color name="hero_stroke_warn">#F5E3BE</color>
+    <color name="hero_stroke_off">#E3E6EB</color>
+    <color name="icon_bg">#F3F5F8</color>
+    <color name="icon_fg">#5A6472</color>
+    <color name="chevron">#C3C9D2</color>
     <color name="ic_launcher_background">#1E6FE0</color>
 </resources>

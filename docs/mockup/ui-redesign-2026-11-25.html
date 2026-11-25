@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>秒跳 · 界面重设计模拟</title>
+<style>
+  :root{
+    --brand:#1E6FE0;
+    --brand-soft:#EEF4FE;
+    --bg:#F6F7F9;
+    --card:#FFFFFF;
+    --line:#E9EBEF;
+    --t1:#14161A;
+    --t2:#6B7280;
+    --t3:#A2A9B4;
+    --ok:#16A34A;
+    --ok-soft:#EAF7EF;
+    --warn:#C2760A;
+    --warn-soft:#FFF8EA;
+    --phone-w:360px;
+    --phone-h:768px;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  html,body{margin:0}
+  body{
+    background:#EDEFF3;
+    background-image:radial-gradient(1200px 600px at 15% -10%, #FFFFFF 0%, rgba(255,255,255,0) 60%),
+                     radial-gradient(900px 500px at 100% 0%, #E6EDF9 0%, rgba(230,237,249,0) 55%);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro SC","PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
+    color:var(--t1);
+    padding:44px 32px 72px;
+  }
+
+  /* ---------------- page head ---------------- */
+  .head{max-width:1180px;margin:0 auto 34px}
+  .kicker{font-size:12px;letter-spacing:2px;color:var(--brand);font-weight:700;text-transform:uppercase}
+  h1{font-size:27px;line-height:1.3;margin:10px 0 8px;letter-spacing:-.2px}
+  h1 em{font-style:normal;color:var(--brand)}
+  .lede{font-size:14px;line-height:1.75;color:var(--t2);max-width:760px;margin:0}
+  .lede b{color:var(--t1);font-weight:600}
+
+  /* ---------------- layout ---------------- */
+  .grid{max-width:1240px;margin:0 auto;display:flex;flex-wrap:wrap;gap:40px 36px;justify-content:center}
+  figure{margin:0;width:var(--phone-w)}
+  figcaption{margin-top:16px;font-size:13px;line-height:1.6;color:var(--t2)}
+  figcaption .tag{
+    display:inline-block;font-size:11px;font-weight:700;letter-spacing:.4px;
+    padding:3px 8px;border-radius:6px;background:#DFE7F3;color:#3B4A63;margin-bottom:7px
+  }
+  figcaption .tag.rec{background:var(--brand);color:#fff}
+  figcaption strong{display:block;font-size:14.5px;color:var(--t1);margin-bottom:4px;font-weight:650}
+
+  /* ---------------- phone shell ---------------- */
+  .phone{
+    width:var(--phone-w);height:var(--phone-h);
+    background:var(--bg);border-radius:34px;position:relative;overflow:hidden;
+    border:1px solid #DEE2E8;
+    box-shadow:0 1px 2px rgba(16,24,40,.05),0 22px 46px -12px rgba(16,24,40,.22);
+  }
+  .phone::after{ /* side highlight */
+    content:"";position:absolute;inset:0;border-radius:34px;pointer-events:none;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.7);
+  }
+  .statusbar{
+    height:26px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 18px;font-size:11.5px;font-weight:600;color:#2B3038;
+  }
+  .sb-r{display:flex;align-items:center;gap:5px;font-weight:500;color:#3A4048}
+  .bars{display:inline-flex;align-items:flex-end;gap:1.5px;height:9px}
+  .bars i{width:2.5px;background:#3A4048;border-radius:1px;display:block}
+  .bars i:nth-child(1){height:3px}.bars i:nth-child(2){height:5px}
+  .bars i:nth-child(3){height:7px}.bars i:nth-child(4){height:9px}
+  .batt{width:17px;height:9px;border:1.3px solid #3A4048;border-radius:3px;position:relative;padding:1.2px}
+  .batt::before{content:"";display:block;height:100%;width:72%;background:#3A4048;border-radius:1px}
+  .batt::after{content:"";position:absolute;right:-3.2px;top:2.4px;width:2px;height:4px;background:#3A4048;border-radius:0 1px 1px 0}
+  .gesture{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);width:104px;height:4px;border-radius:2px;background:#16181C;opacity:.22}
+  .body{padding:0 18px}
+  .scroll{height:calc(var(--phone-h) - 26px);overflow:hidden;padding:0 18px;
+          display:flex;flex-direction:column}
+  .scroll > *{flex:0 0 auto}
+
+  /* ---------------- topbar ---------------- */
+  .topbar{display:flex;align-items:baseline;justify-content:space-between;padding:10px 0 16px}
+  .brand{font-size:23px;font-weight:700;letter-spacing:.5px}
+  .ver{font-size:11px;color:#B0B7C1;letter-spacing:.3px}
+
+  /* ---------------- hero ---------------- */
+  .hero{
+    border-radius:20px;padding:16px 16px 12px;position:relative;overflow:hidden;
+    background:linear-gradient(158deg,#F1F8F3 0%,#FFFFFF 62%);
+    border:1px solid #DCEFE3;
+    box-shadow:0 1px 2px rgba(16,24,40,.03);
+  }
+  .hero.warn{background:linear-gradient(158deg,#FFF8EA 0%,#FFFFFF 62%);border-color:#F5E3BE}
+  .hero.off{background:linear-gradient(158deg,#F2F3F5 0%,#FFFFFF 62%);border-color:#E3E6EB}
+  .hrow{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .state{display:flex;align-items:center;gap:7px;font-size:14.5px;font-weight:650;color:#12603A}
+  .hero.warn .state{color:#9A5B06}
+  .hero.off .state{color:#4A5058}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3.5px rgba(22,163,74,.14)}
+  .hero.warn .dot{background:var(--warn);box-shadow:0 0 0 3.5px rgba(194,118,10,.14)}
+  .hero.off .dot{background:#9AA1AC;box-shadow:0 0 0 3.5px rgba(154,161,172,.14)}
+  .hsub{font-size:12px;color:#6E8A78;margin-top:6px;line-height:1.5;max-width:180px}
+  .hero.warn .hsub{color:#A07A34}
+  .hero.off .hsub{color:var(--t2)}
+  .num{font-size:40px;font-weight:700;line-height:1;letter-spacing:-1.5px;text-align:right}
+  .num span{font-size:13px;font-weight:600;color:var(--t2);letter-spacing:0;margin-left:3px}
+  .numcap{font-size:11.5px;color:var(--t3);text-align:right;margin-top:6px}
+  .cta{
+    display:inline-flex;align-items:center;gap:5px;margin-top:2px;
+    background:var(--warn);color:#fff;font-size:13px;font-weight:650;
+    padding:9px 15px;border-radius:11px;white-space:nowrap;
+    box-shadow:0 4px 12px -4px rgba(194,118,10,.55);
+  }
+  .cta.blue{background:var(--brand);box-shadow:0 4px 12px -4px rgba(30,111,224,.5)}
+  .pills{display:flex;gap:14px;margin-top:13px;padding-top:11px;border-top:1px solid rgba(20,22,26,.06)}
+  .pill{display:flex;align-items:center;gap:5px;font-size:11.5px;color:#8A929C}
+  .pill i{width:5px;height:5px;border-radius:50%;background:#C7CDD6}
+  .pill.ok i{background:var(--ok)}
+  .pill.bad{color:#A06410}
+  .pill.bad i{background:var(--warn)}
+
+  /* ---------------- list card ---------------- */
+  .card{background:var(--card);border-radius:18px;border:1px solid var(--line);margin-top:13px;
+        box-shadow:0 1px 2px rgba(16,24,40,.03);overflow:hidden}
+  .row{display:flex;align-items:center;gap:12px;padding:12px 15px;min-height:62px}
+  .sep{height:1px;background:var(--line);margin-left:60px}
+  .sep.full{margin-left:0}
+  .ico{
+    width:34px;height:34px;border-radius:11px;flex:none;
+    display:flex;align-items:center;justify-content:center;
+    background:#F3F5F8;color:#5A6472;
+  }
+  .ico.brand{background:var(--brand-soft);color:var(--brand)}
+  .ico.g{background:var(--ok-soft);color:#12894A}
+  .ico svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;
+           stroke-linecap:round;stroke-linejoin:round}
+  .tx{flex:1;min-width:0}
+  .t{font-size:14.5px;font-weight:550;line-height:1.35}
+  .s{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.4}
+  .sw{width:42px;height:25px;border-radius:13px;background:#DEE2E8;position:relative;flex:none;transition:.2s}
+  .sw::after{content:"";position:absolute;top:2.5px;left:2.5px;width:20px;height:20px;border-radius:50%;
+             background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18);transition:.2s}
+  .sw.on{background:var(--brand)}
+  .sw.on::after{left:19.5px}
+  .sw.dim{opacity:.45}
+  .chev{color:#C3C9D2;flex:none;width:16px;height:16px;stroke-width:2}
+  .chev svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+  .foot{text-align:center;font-size:11px;color:#AFB6C0;margin-top:auto;padding:18px 0 22px;letter-spacing:.2px}
+
+  /* ---------------- variant B (settings style) ---------------- */
+  .b-title{font-size:25px;font-weight:700;letter-spacing:-.2px;padding-top:6px}
+  .b-sub{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--t2);margin-top:7px}
+  .b-sub b{color:#12603A;font-weight:650}
+  .gtitle{font-size:11.5px;font-weight:600;color:#8B929D;letter-spacing:.6px;padding:20px 4px 8px}
+  .bcard{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden;
+         box-shadow:0 1px 2px rgba(16,24,40,.03)}
+  .brow{display:flex;align-items:center;gap:10px;padding:13px 14px;min-height:52px}
+  .brow .t{font-size:14.5px;font-weight:500;flex:1}
+  .brow .mini{font-size:11.5px;color:var(--t3);margin-left:auto;margin-right:2px}
+  .brow .mini.ok{color:#12894A;font-weight:600}
+  .brow .mini.bad{color:#A06410;font-weight:600}
+  .bsep{height:1px;background:var(--line);margin-left:14px}
+
+  /* ---------------- variant C (modes) ---------------- */
+  .c-status{display:flex;align-items:center;justify-content:space-between;margin-top:4px}
+  .c-big{font-size:32px;font-weight:700;letter-spacing:-1px}
+  .c-big span{font-size:13px;color:var(--t2);font-weight:600;letter-spacing:0;margin-left:4px}
+  .mode{
+    border:1.5px solid var(--line);border-radius:16px;padding:14px 15px;margin-top:10px;
+    background:#fff;display:flex;align-items:center;gap:12px;position:relative;
+  }
+  .mode.sel{border-color:var(--brand);background:linear-gradient(140deg,#F4F8FF,#FFFFFF);
+            box-shadow:0 6px 18px -10px rgba(30,111,224,.5)}
+  .mode .mt{font-size:15px;font-weight:650}
+  .mode .ms{font-size:11.5px;color:var(--t3);margin-top:4px;line-height:1.5}
+  .radio{width:20px;height:20px;border-radius:50%;border:1.6px solid #D3D8E0;flex:none;position:relative}
+  .mode.sel .radio{border-color:var(--brand);border-width:6px}
+  .badge{position:absolute;top:-8px;right:14px;background:var(--brand);color:#fff;font-size:10px;
+         font-weight:700;padding:2.5px 7px;border-radius:6px;letter-spacing:.4px}
+
+  /* ---------------- log page ---------------- */
+  .navbar{display:flex;align-items:center;justify-content:space-between;padding:8px 0 14px}
+  .navbar .nb-t{font-size:16px;font-weight:650}
+  .nb-a{font-size:13px;color:var(--brand);font-weight:600}
+  .back{width:16px;height:16px;color:#3A4048}
+  .back svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+  .daylab{font-size:11.5px;color:#98A0AB;font-weight:600;padding:14px 2px 8px;letter-spacing:.4px}
+  .logcard{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .lrow{display:flex;gap:10px;padding:12px 14px}
+  .lrow + .lrow{border-top:1px solid #F0F2F5}
+  .ld{width:6px;height:6px;border-radius:50%;margin-top:6px;flex:none;background:var(--ok)}
+  .ld.w{background:var(--warn)}.ld.g{background:#C7CDD6}
+  .lmain{flex:1;min-width:0}
+  .lname{font-size:13.5px;font-weight:550}
+  .ldesc{font-size:11.5px;color:var(--t3);margin-top:3px;line-height:1.45}
+  .ltime{font-size:11px;color:#B6BCC6;flex:none;margin-top:2px}
+
+  /* ---------------- notes ---------------- */
+  .notes{max-width:1180px;margin:56px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
+  .note{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+  .note h3{margin:0 0 10px;font-size:14px;font-weight:650;display:flex;align-items:center;gap:8px}
+  .note h3::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--brand)}
+  .note ul{margin:0;padding-left:17px;font-size:13px;line-height:1.85;color:#4B5462}
+  .note li::marker{color:#BFC6D1}
+  .note b{color:var(--t1)}
+  .divider{max-width:1180px;margin:60px auto 0;height:1px;background:#DFE3E9}
+  .footnote{max-width:1180px;margin:22px auto 0;font-size:12.5px;color:#8B929D;line-height:1.8}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="kicker">SEC/JUMP · UI REDESIGN</div>
+  <h1>秒跳 · 主界面重设计 <em>模拟稿</em></h1>
+  <p class="lede">
+    目标只有一个：<b>一进来看一眼就知道「现在有没有在保护我」，以及今天省了我几次</b>。
+    现在界面上 4 个开关、1 个状态卡、1 个按钮、10 行等宽字日志、1 段提示语，视觉重量几乎一样，
+    所以眼睛没有落点。下面 4 屏是候选方案，确定方向后我再改 layout、补图标、写代码。
+  </p>
+</div>
+
+<div class="grid">
+
+  <!-- ============ A 正常 ============ -->
+  <figure>
+    <div class="phone">
+      <div class="statusbar"><span>21:43</span><span class="sb-r">
+        <span>5G</span><span class="bars"><i></i><i></i><i></i><i></i></span>
+        <span class="batt"></span><span>86%</span></span>
+      </div>
+      <div class="scroll">
+        <div class="topbar"><div class="brand">秒跳</div><div class="ver">v1.6.0</div></div>
+
+        <div class="hero">
+          <div class="hrow">
+            <div>
+              <div class="state"><i class="dot"></i>服务运行中</div>
+              <div class="hsub">后台保护正常</div>
+            </div>
+            <div>
+              <div class="num">12<span>次</span></div>
+              <div class="numcap">今日已跳过</div>
+            </div>
+          </div>
+          <div class="pills">
+            <span class="pill ok"><i></i>通知</span>
+            <span class="pill ok"><i></i>悬浮窗</span>
+            <span class="pill ok"><i></i>电池</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <div class="ico brand"><svg viewBox="0 0 20 20"><path d="M10 2.6v6.2"/><path d="M15 4.7a6.7 6.7 0 1 1-10 0"/></svg></div>
+            <div class="tx"><div class="t">总开关</div><div class="s">关掉后所有功能暂停</div></div>
+            <div class="sw on"></div>
+          </div>
+          <div class="sep"></div>
+          <div class="row">
+            <div class="ico"><svg viewBox="0 0 20 20"><path d="M10.8 2.2 4.4 11h4.4l-1 6.8L14.6 9H10l.8-6.8Z"/></svg></div>
+            <div class="tx"><div class="t">跳过开屏广告</div><div class="s">自动点掉「跳过」</div></div>
+            <div class="sw on"></div>
+          </div>
+          <div class="sep"></div>
+          <div class="row">
+            <div class="ico"><svg viewBox="0 0 20 20"><rect x="2.6" y="3.6" width="14.8" height="12.8" rx="2.6"/><path d="M6 7.6h8M6 11h4.6"/></svg></div>
+            <div class="tx"><div class="t">关闭应用内弹窗</div><div class="s">更新提示、活动弹窗</div></div>
+            <div class="sw on"></div>
+          </div>
+          <div class="sep"></div>
+          <div class="row">
+            <div class="ico g"><svg viewBox="0 0 20 20"><path d="M10 2.6 4.2 5v4.8c0 3.9 2.5 6.5 5.8 7.4 3.3-.9 5.8-3.5 5.8-7.4V5L10 2.6Z"/><path d="m7.4 9.6 1.9 1.9 3.4-3.4"/></svg></div>
+            <div class="tx"><div class="t">防跳转</div><div class="s">被摇一摇带走时自动返回</div></div>
+            <div class="sw on"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row" style="min-height:56px">
+            <div class="tx"><div class="t">规则管理</div><div class="s">50 个应用 · 自动学习已开启</div></div>
+            <span class="chev"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5 5.5-5 5.5"/></svg></span>
+          </div>
+          <div class="sep full" style="margin-left:15px"></div>
+          <div class="row" style="min-height:56px">
+            <div class="tx"><div class="t">运行记录</div><div class="s">看它今天做了什么</div></div>
+            <span class="chev"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5 5.5-5 5.5"/></svg></span>
+          </div>
+        </div>
+
+        <div class="foot">不联网 · 不上传任何数据</div>
+      </div>
+      <div class="gesture"></div>
+    </div>
+    <figcaption>
+      <span class="tag rec">推荐 · 方案 A</span>
+      <strong>状态置顶 + 大数字 + 干净列表</strong>
+      一眼看到「运行中 / 12 次」；4 个开关统一成图标行；日志从主界面移走，改成二级页。
+    </figcaption>
+  </figure>
+
+  <!-- ============ A 异常 ============ -->
+  <figure>
+    <div class="phone">
+      <div class="statusbar"><span>21:43</span><span class="sb-r">
+        <span>5G</span><span class="bars"><i></i><i></i><i></i><i></i></span>
+        <span class="batt"></span><span>86%</span></span>
+      </div>
+      <div class="scroll">
+        <div class="topbar"><div class="brand">秒跳</div><div class="ver">v1.6.0</div></div>
+
+        <div class="hero warn">
+          <div class="hrow">
+            <div style="flex:1">
+              <div class="state"><i class="dot"></i>还需要 1 步</div>
+              <div class="hsub">通知权限被关，后台会被冻结</div>
+            </div>
+            <div class="cta">去修复</div>
+          </div>
+          <div class="pills">
+            <span class="pill bad"><i></i>通知</span>
+            <span class="pill ok"><i></i>悬浮窗</span>
+            <span class="pill ok"><i></i>电池</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <div class="ico brand"><svg viewBox="0 0 20 20"><path d="M10 2.6v6.2"/><path d="M15 4.7a6.7 6.7 0 1 1-10 0"/></svg></div>
+            <div class="tx"><div class="t">总开关</div><div class="s">关掉后所有功能暂停</div></div>
+            <div class="sw on"></div>
+          </div>
+          <div class="sep"></div>
+          <div class="row">
+            <div class="ico"><svg viewBox="0 0 20 20"><path d="M10.8 2.2 4.4 11h4.4l-1 6.8L14.6 9H10l.8-6.8Z"/></svg></div>
+            <div class="tx"><div class="t">跳过开屏广告</div><div class="s">自动点掉「跳过」</div></div>
+            <div class="sw on"></div>
+          </div>
+          <div class="sep"></div>
+          <div class="row">
+            <div class="ico"><svg viewBox="0 0 20 20"><rect x="2.6" y="3.6" width="14.8" height="12.8" rx="2.6"/><path d="M6 7.6h8M6 11h4.6"/></svg></div>
+            <div class="tx"><div class="t">关闭应用内弹窗</div><div class="s">更新提示、活动弹窗</div></div>
+            <div class="sw on"></div>
+          </div>
+          <div class="sep"></div>
+          <div class="row">
+            <div class="ico g"><svg viewBox="0 0 20 20"><path d="M10 2.6 4.2 5v4.8c0 3.9 2.5 6.5 5.8 7.4 3.3-.9 5.8-3.5 5.8-7.4V5L10 2.6Z"/><path d="m7.4 9.6 1.9 1.9 3.4-3.4"/></svg></div>
+            <div class="tx"><div class="t">防跳转</div><div class="s">被摇一摇带走时自动返回</div></div>
+            <div class="sw on"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row" style="min-height:56px">
+            <div class="tx"><div class="t">规则管理</div><div class="s">50 个应用 · 自动学习已开启</div></div>
+            <span class="chev"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5 5.5-5 5.5"/></svg></span>
+          </div>
+          <div class="sep full" style="margin-left:15px"></div>
+          <div class="row" style="min-height:56px">
+            <div class="tx"><div class="t">运行记录</div><div class="s">看它今天做了什么</div></div>
+            <span class="chev"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5 5.5-5 5.5"/></svg></span>
+          </div>
+        </div>
+
+        <div class="foot">不联网 · 不上传任何数据</div>
+      </div>
+      <div class="gesture"></div>
+    </div>
+    <figcaption>
+      <span class="tag">方案 A · 异常态</span>
+      <strong>同一张卡换个颜色，只说一句话</strong>
+      现在那行「⚠ 通知权限未开 → 后台会被系统冻结，广告跳不过（点这里修）」又长又挤在 12sp 灰字里；改成一句人话 + 一个实心按钮。
+    </figcaption>
+  </figure>
+
+  <!-- ============ 运行记录页 ============ -->
+  <figure>
+    <div class="phone">
+      <div class="statusbar"><span>21:43</span><span class="sb-r">
+        <span>5G</span><span class="bars"><i></i><i></i><i></i><i></i></span>
+        <span class="batt"></span><span>86%</span></span>
+      </div>
+      <div class="scroll">
+        <div class="navbar">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="back"><svg viewBox="0 0 20 20"><path d="m12 4.5-5 5.5 5 5.5"/></svg></span>
+            <span class="nb-t">运行记录</span>
+          </div>
+          <span class="nb-a">导出</span>
+        </div>
+
+        <div class="daylab">今天 · 12 条</div>
+        <div class="logcard">
+          <div class="lrow"><i class="ld"></i><div class="lmain"><div class="lname">微信</div><div class="ldesc">开屏广告已跳过</div></div><div class="ltime">21:38</div></div>
+          <div class="lrow"><i class="ld w"></i><div class="lmain"><div class="lname">淘宝</div><div class="ldesc">摇一摇跳到了应用商店，已返回</div></div><div class="ltime">21:12</div></div>
+          <div class="lrow"><i class="ld"></i><div class="lmain"><div class="lname">闲鱼</div><div class="ldesc">开屏广告已跳过</div></div><div class="ltime">20:47</div></div>
+          <div class="lrow"><i class="ld g"></i><div class="lmain"><div class="lname">京东</div><div class="ldesc">开屏页没找到跳过按钮，稍后重试</div></div><div class="ltime">19:03</div></div>
+          <div class="lrow"><i class="ld"></i><div class="lmain"><div class="lname">微博</div><div class="ldesc">开屏广告已跳过</div></div><div class="ltime">18:22</div></div>
+        </div>
+
+        <div class="daylab">昨天 · 27 条</div>
+        <div class="logcard">
+          <div class="lrow"><i class="ld"></i><div class="lmain"><div class="lname">哔哩哔哩</div><div class="ldesc">开屏广告已跳过</div></div><div class="ltime">23:41</div></div>
+          <div class="lrow"><i class="ld w"></i><div class="lmain"><div class="lname">高德地图</div><div class="ldesc">被跳到了浏览器，已返回</div></div><div class="ltime">22:08</div></div>
+        </div>
+      </div>
+      <div class="gesture"></div>
+    </div>
+    <figcaption>
+      <span class="tag">配套页</span>
+      <strong>运行记录页：按天分组、按应用命名</strong>
+      主界面那 10 行等宽字太吵。这里只留「谁、做了什么、几点」，颜色区分跳过 / 拦截 / 没找到，长按或右上角导出。
+    </figcaption>
+  </figure>
+
+  <!-- ============ B ============ -->
+  <figure>
+    <div class="phone">
+      <div class="statusbar"><span>21:43</span><span class="sb-r">
+        <span>5G</span><span class="bars"><i></i><i></i><i></i><i></i></span>
+        <span class="batt"></span><span>86%</span></span>
+      </div>
+      <div class="scroll" style="padding:0 18px">
+        <div class="b-title">秒跳</div>
+        <div class="b-sub"><i class="dot" style="width:7px;height:7px;box-shadow:none"></i><b>服务运行中</b><span>· 今日已跳过 12 次</span></div>
+
+        <div class="gtitle">保护</div>
+        <div class="bcard">
+          <div class="brow"><div class="t">总开关</div><div class="sw on"></div></div>
+          <div class="bsep"></div>
+          <div class="brow"><div class="t">跳过开屏广告</div><div class="sw on"></div></div>
+          <div class="bsep"></div>
+          <div class="brow"><div class="t">关闭应用内弹窗</div><div class="sw on"></div></div>
+          <div class="bsep"></div>
+          <div class="brow"><div class="t">防跳转</div><div class="sw on"></div></div>
+        </div>
+        <div style="font-size:11.5px;color:#98A0AB;padding:8px 4px 0;line-height:1.5">被摇一摇带走时自动返回上一页</div>
+
+        <div class="gtitle">其他</div>
+        <div class="bcard">
+          <div class="brow"><div class="t">规则管理</div><span class="mini">50 个</span><span class="chev"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5 5.5-5 5.5"/></svg></span></div>
+          <div class="bsep"></div>
+          <div class="brow"><div class="t">运行记录</div><span class="mini">今天 12</span><span class="chev"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5 5.5-5 5.5"/></svg></span></div>
+        </div>
+
+        <div class="gtitle">运行状态</div>
+        <div class="bcard">
+          <div class="brow"><div class="t">通知权限</div><span class="mini ok">正常</span></div>
+          <div class="bsep"></div>
+          <div class="brow"><div class="t">悬浮窗权限</div><span class="mini ok">正常</span></div>
+          <div class="bsep"></div>
+          <div class="brow"><div class="t">电池白名单</div><span class="mini ok">正常</span></div>
+        </div>
+
+        <div class="foot">秒跳 v1.6.0 · 不联网 · 不上传任何数据</div>
+      </div>
+      <div class="gesture"></div>
+    </div>
+    <figcaption>
+      <span class="tag">方案 B</span>
+      <strong>系统设置风 · 最省空间</strong>
+      没有状态卡，靠标题下的一行小字交代状态。信息密度最高、最「原生」，但也最平淡，不像个产品。
+    </figcaption>
+  </figure>
+
+  <!-- ============ C ============ -->
+  <figure>
+    <div class="phone">
+      <div class="statusbar"><span>21:43</span><span class="sb-r">
+        <span>5G</span><span class="bars"><i></i><i></i><i></i><i></i></span>
+        <span class="batt"></span><span>86%</span></span>
+      </div>
+      <div class="scroll">
+        <div class="topbar"><div class="brand">秒跳</div><div class="ver">v1.6.0</div></div>
+
+        <div class="c-status">
+          <div class="c-big">12<span>次 · 今日跳过</span></div>
+          <div class="state" style="font-size:12.5px"><i class="dot"></i>运行中</div>
+        </div>
+
+        <div class="gtitle" style="padding:18px 2px 2px">保护强度</div>
+        <div class="mode"><div class="tx"><div class="mt">关闭</div><div class="ms">完全不介入，只保留手动查看记录</div></div><div class="radio"></div></div>
+        <div class="mode sel"><div class="tx"><div class="mt">标准</div><div class="ms">跳开屏 + 关弹窗，最稳，误伤最少</div></div><div class="radio"></div><span class="badge">推荐</span></div>
+        <div class="mode"><div class="tx"><div class="mt">强力</div><div class="ms">再加防跳转，被带走会自动返回</div></div><div class="radio"></div></div>
+
+        <div class="card" style="margin-top:18px">
+          <div class="row" style="min-height:54px"><div class="tx"><div class="t">高级设置</div><div class="s">单独开关每一项、拦截名单</div></div>
+            <span class="chev"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5 5.5-5 5.5"/></svg></span></div>
+          <div class="sep full" style="margin-left:15px"></div>
+          <div class="row" style="min-height:54px"><div class="tx"><div class="t">运行记录</div></div>
+            <span class="chev"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5 5.5-5 5.5"/></svg></span></div>
+        </div>
+
+        <div style="margin-top:16px;padding:14px 15px;border-radius:14px;background:#F1F4F8;border:1px solid #E6EAF0">
+          <div style="font-size:12px;font-weight:650;color:#3E4753;margin-bottom:5px">标准模式会做什么</div>
+          <div style="font-size:11.5px;line-height:1.7;color:#7C8593">自动点掉开屏广告的「跳过」，关掉更新提示和活动弹窗。不联网，不读你的任何内容。</div>
+        </div>
+
+        <div class="foot">秒跳 v1.6.0 · 不联网 · 不上传任何数据</div>
+      </div>
+      <div class="gesture"></div>
+    </div>
+    <figcaption>
+      <span class="tag">方案 C</span>
+      <strong>模式化 · 最少的决定</strong>
+      把 4 个开关收成 3 档强度，普通用户只需选一次。但「标准 / 强力」的差别要解释，容易让人觉得不透明。
+    </figcaption>
+  </figure>
+
+</div>
+
+<div class="divider"></div>
+
+<div class="notes">
+  <div class="note">
+    <h3>相对现在的改动</h3>
+    <ul>
+      <li>状态卡重做：左侧一句话状态，右侧 <b>40sp 大数字</b>，比原来 15sp 灰字更容易扫到</li>
+      <li>三项系统权限从一行长警告，变成 <b>三个小圆点</b>，哪项红一眼看出</li>
+      <li>4 个开关加 <b>34dp 图标底</b>，行高统一 62dp，分隔线左缩进对齐文字</li>
+      <li>删掉主界面的 <b>10 行等宽日志</b>，改为「运行记录」二级页</li>
+      <li>「规则管理」按钮变成列表行，和记录同一个卡片，少一个孤零零的按钮</li>
+      <li>主开关关闭时，下面三项 <b>置灰</b>（视觉上真的「暂停」了）</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <h3>实施成本</h3>
+    <ul>
+      <li>纯 XML + Material3，<b>不引入新依赖</b>、不换主题</li>
+      <li>4 个图标用 vector drawable（手写 path，约 40 行）</li>
+      <li>运行记录页复用现有 <code>SkipLog</code>，新增一个 Activity，按「应用名 + 结果」重新排版</li>
+      <li>长按标题进探测器、长按规则管理看学习记录、长按记录导出 —— 全部保留，只是不进界面</li>
+      <li>预计 142 个单测不受影响（只动 UI 层）</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <h3>需要你定的两件事</h3>
+    <ul>
+      <li>选 <b>A / B / C</b> 哪个方向（我推荐 A）</li>
+      <li>「运行记录」是 <b>单独一页</b>，还是做 <b>从底部弹出的抽屉</b>（不离开主界面）</li>
+    </ul>
+  </div>
+</div>
+
+<div class="footnote">
+  说明：以上是 HTML 静态模拟，用来对齐视觉方向，不是最终像素。确认后我再改 <code>activity_main.xml</code>、<code>MainActivity.kt</code>、新增图标与记录页，跑一遍单测和真机回归再出 APK。
+</div>
+
+</body>
+</html>
