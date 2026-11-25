@@ -60,7 +60,11 @@ class GuardDecisionTest {
         dtMs: Long = 3_000L,
         sinceLastBackMs: Long = Long.MAX_VALUE,
         changed: Boolean = true,
-        custom: Boolean = false
+        custom: Boolean = false,
+        inputPkg: String? = null,
+        inputAgoMs: Long = Long.MAX_VALUE,
+        inputFullscreen: Boolean = false,
+        adSeen: Boolean = false
     ): GuardDecision.Verdict = GuardDecision.decide(
         GuardDecision.Context(
             destPkg = dest,
@@ -79,7 +83,11 @@ class GuardDecisionTest {
             destIsUserDriven = dest in AppLists.USER_DRIVEN,
             originIsUserDriven = origin != null && origin in AppLists.USER_DRIVEN,
             originIsAdProne = origin != null && origin in AppLists.AD_PRONE,
-            originIsShell = origin != null && AppLists.isShell(origin)
+            originIsShell = origin != null && AppLists.isShell(origin),
+            inputPkg = inputPkg,
+            userInputAgoMs = inputAgoMs,
+            inputFullscreen = inputFullscreen,
+            originAdSeenRecently = adSeen
         )
     )
 
@@ -771,11 +779,11 @@ class GuardDecisionTest {
         assertEquals(
             "影子模式下只能记录，不能动手",
             GuardDecision.Disposition.SHADOW,
-            GuardDecision.disposition(v, shadow = true)
+            GuardDecision.disposition(v, GuardDecision.Mode.SHADOW)
         )
         assertTrue(
             "影子模式绝不能映射到 ACT",
-            GuardDecision.disposition(v, shadow = true) != GuardDecision.Disposition.ACT
+            GuardDecision.disposition(v, GuardDecision.Mode.SHADOW) != GuardDecision.Disposition.ACT
         )
     }
 
@@ -784,15 +792,15 @@ class GuardDecisionTest {
         val v = judge(dest = taobao, origin = wakeup, dtMs = 5_000L)
         assertEquals(
             GuardDecision.Disposition.ACT,
-            GuardDecision.disposition(v, shadow = false)
+            GuardDecision.disposition(v, GuardDecision.Mode.COMPAT)
         )
     }
 
     @Test
     fun 不该拦时影子模式也无事可做() {
         val v = judge(dest = alipay, origin = wakeup, dtMs = 800L)
-        assertEquals(GuardDecision.Disposition.NONE, GuardDecision.disposition(v, false))
-        assertEquals(GuardDecision.Disposition.NONE, GuardDecision.disposition(v, true))
+        assertEquals(GuardDecision.Disposition.NONE, GuardDecision.disposition(v, GuardDecision.Mode.COMPAT))
+        assertEquals(GuardDecision.Disposition.NONE, GuardDecision.disposition(v, GuardDecision.Mode.SHADOW))
     }
 
     // ================================================================
@@ -832,5 +840,164 @@ class GuardDecisionTest {
             "撤销时长必须明显长于自动熔断",
             30 * 60_000L >= GuardDecision.REPEAT_MUTE_MS * 3
         )
+    }
+
+    // ================================================================
+    // 十、输入溯源（v1.4.0 · R4）
+    //
+    // 「用户点了商品卡 → 淘宝起来」和「摇一摇 → 淘宝起来」在前台切换上
+    // 完全一样，唯一的区别是有没有 TYPE_VIEW_CLICKED。
+    // 这一组测试锁住四件事：什么时候算数、什么时候不算数。
+    // ================================================================
+
+    @Test
+    fun 用户在来源里刚点过一下就不回退() {
+        val v = judge(
+            dest = taobao, origin = wakeup, dtMs = 1_200L,
+            inputPkg = wakeup, inputAgoMs = 900L
+        )
+        assertEquals("点商品卡进淘宝不该被弹回来", GuardDecision.Action.KEEP, v.action)
+        assertTrue(v.reason.contains("自己点"))
+    }
+
+    @Test
+    fun 没有输入时必须按原判定走() {
+        // 这条是整组测试里最重要的一条。Context.userInputAgoMs 的默认值
+        // 如果是 0，`0 in 0..1500` 成立 → 整条防跳转被一条默认值全否决，
+        // 而且是静默的：日志里只会写「用户 0ms 前自己点了一下」。
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 1_200L)
+        assertEquals("没有点击记录不能当成「刚点过」", GuardDecision.Action.BACK, v.action)
+        assertEquals(Long.MAX_VALUE, GuardDecision.Context(
+            destPkg = taobao, destChanged = true, originPkg = wakeup,
+            originCold = true, originSettled = false, originShowingSplash = true,
+            dtMs = 1_000L, sinceLastBackMs = Long.MAX_VALUE,
+            destIsStore = false, destIsBrowser = false, destIsLanding = true,
+            destIsContent = false, destIsCustom = false, destIsUserDriven = false,
+            originIsUserDriven = false, originIsAdProne = true
+        ).userInputAgoMs)
+    }
+
+    @Test
+    fun 全屏点击不算用户输入() {
+        // 点击型广告的容器就是全屏 View，点它同样派发 TYPE_VIEW_CLICKED。
+        // 认了它，这类广告会从「拦」直接变成「不拦」。
+        val v = judge(
+            dest = taobao, origin = wakeup, dtMs = 1_200L,
+            inputPkg = wakeup, inputAgoMs = 600L, inputFullscreen = true
+        )
+        assertEquals("全屏热区上的点击不能否决拦截", GuardDecision.Action.BACK, v.action)
+    }
+
+    @Test
+    fun 点击太久以前的不算() {
+        val v = judge(
+            dest = taobao, origin = wakeup, dtMs = 1_200L,
+            inputPkg = wakeup, inputAgoMs = GuardDecision.INPUT_WINDOW_MS + 1
+        )
+        assertEquals(GuardDecision.Action.BACK, v.action)
+    }
+
+    @Test
+    fun 点击发生在别的App里不算() {
+        // 在微信里点了一下，两秒后番茄小说的广告跳淘宝 —— 不能因为
+        // 「刚刚有输入」就放过。必须比包名。
+        val v = judge(
+            dest = taobao, origin = wakeup, dtMs = 1_200L,
+            inputPkg = weixin, inputAgoMs = 200L
+        )
+        assertEquals(GuardDecision.Action.BACK, v.action)
+    }
+
+    // ================================================================
+    // 十一、两档处置（v1.4.0 · R6）
+    //
+    // 严格档只对「纯时间推断」留手。有正面证据的那一半照拦，
+    // 否则严格档就成了「关掉防跳转」的另一个名字。
+    // ================================================================
+
+    @Test
+    fun 有开屏证据时是高档() {
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 5_000L, splash = true)
+        assertEquals(GuardDecision.Tier.HIGH, v.tier)
+    }
+
+    @Test
+    fun 只靠时间推断时是低档() {
+        // splash=false + 2 秒内落地：走的是 WINDOW_UNWATCHED_MS 那条降级路径
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 2_000L, splash = false)
+        assertEquals("没有观察证据时只能算低档", GuardDecision.Tier.LOW, v.tier)
+    }
+
+    @Test
+    fun 看到广告指纹就升级成高档() {
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 2_000L, splash = false, adSeen = true)
+        assertEquals(GuardDecision.Tier.HIGH, v.tier)
+    }
+
+    @Test
+    fun 兼容档下低档仍然回退() {
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 2_000L, splash = false)
+        assertEquals(GuardDecision.Tier.LOW, v.tier)
+        assertEquals(
+            "默认档位不能改变现行为",
+            GuardDecision.Disposition.ACT,
+            GuardDecision.disposition(v, GuardDecision.Mode.COMPAT)
+        )
+    }
+
+    @Test
+    fun 严格档下低档只提示() {
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 2_000L, splash = false)
+        assertEquals(
+            GuardDecision.Disposition.NOTICE_ONLY,
+            GuardDecision.disposition(v, GuardDecision.Mode.STRICT)
+        )
+    }
+
+    @Test
+    fun 严格档下高档照样拦() {
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 5_000L, splash = true)
+        assertEquals(GuardDecision.Tier.HIGH, v.tier)
+        assertEquals(
+            "有证据的还是要拦，否则严格档等于关掉功能",
+            GuardDecision.Disposition.ACT,
+            GuardDecision.disposition(v, GuardDecision.Mode.STRICT)
+        )
+    }
+
+    @Test
+    fun 影子档压过一切() {
+        val v = judge(dest = taobao, origin = wakeup, dtMs = 5_000L, splash = true)
+        assertEquals(
+            GuardDecision.Disposition.SHADOW,
+            GuardDecision.disposition(v, GuardDecision.Mode.SHADOW)
+        )
+    }
+
+    // ================================================================
+    // 十二、商店不再是「无条件拦」（v1.4.0 · R7）
+    // ================================================================
+
+    @Test
+    fun 来源已经进正片时跳商店不拦() {
+        // 旧写法 `destIsStore -> true` 连 settled 都不看：用户在某个 App 里
+        // 点「检查更新」也会被弹回来。这是报告 D2 指的那条。
+        val v = judge(dest = miStore, origin = wakeup, cold = true, settled = true, dtMs = 3_000L)
+        assertEquals(GuardDecision.Action.KEEP, v.action)
+    }
+
+    @Test
+    fun 冷启动没进正片时跳商店仍然拦() {
+        val v = judge(dest = miStore, origin = wakeup, cold = true, settled = false, dtMs = 3_000L)
+        assertEquals(GuardDecision.Action.BACK, v.action)
+    }
+
+    @Test
+    fun 用户自己点进商店不拦() {
+        val v = judge(
+            dest = miStore, origin = wakeup, cold = true, settled = false, dtMs = 3_000L,
+            inputPkg = wakeup, inputAgoMs = 800L
+        )
+        assertEquals(GuardDecision.Action.KEEP, v.action)
     }
 }

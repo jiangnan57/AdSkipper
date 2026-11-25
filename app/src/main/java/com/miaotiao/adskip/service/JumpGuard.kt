@@ -8,6 +8,8 @@ import com.miaotiao.adskip.data.AppLists
 import com.miaotiao.adskip.data.InterceptLedger
 import com.miaotiao.adskip.data.Prefs
 import com.miaotiao.adskip.engine.GuardDecision
+import com.miaotiao.adskip.engine.InputTrace
+import com.miaotiao.adskip.engine.PairLedger
 import com.miaotiao.adskip.util.SkipLog
 
 /**
@@ -120,6 +122,21 @@ object JumpGuard {
     private var lastBackAt = 0L
 
     /**
+     * 最近一次在**哪个包**里看到过广告指纹，以及时刻。
+     *
+     * 来源来自 SplashScanner 的 `adFingerprint`（一次遍历、零额外 IPC）。
+     * v1.4.0 只把它写进日志、并用来划分证据档位（HIGH/LOW），
+     * 不单独决定拦不拦——指纹表还没经过一周影子数据校准。
+     */
+    @Volatile
+    private var adSeenPkg: String? = null
+    @Volatile
+    private var adSeenAt = 0L
+
+    /** 广告指纹的有效期：8 秒，与内置规则的开屏监测窗口一致 */
+    private const val AD_SEEN_TTL_MS = 8_000L
+
+    /**
      * 上一次被拦截时用的来源 App。
      *
      * 拦截之后三级兜底会把用户**重新拉回**这个 App，那是一次全新的冷启动
@@ -162,6 +179,14 @@ object JumpGuard {
      * 熔断该继续有效。
      */
     private val repeatGuard = GuardDecision.RepeatGuard()
+
+    /**
+     * (来源, 目的地) 配对账本。
+     *
+     * 与 [repeatGuard] 的区别：那个只看目的地，这个看方向。
+     * 「WakeUp → 淘宝」被误拦不代表「抖音 → 淘宝」也会被误拦。
+     */
+    private val pairLedger = PairLedger()
 
     /** 拦截名单缓存，避免每次事件都重新解析字符串 */
     private var cachedRaw: String? = null
@@ -351,6 +376,18 @@ object JumpGuard {
         val destIsUserDriven = pkg in AppLists.USER_DRIVEN
 
         val dt = if (origin != null && origin != pkg) now - originAtSnapshot else -1L
+
+        // 用户输入：只有「刚才就是在来源里点的」才算数。
+        // InputTrace 是全局最后一次点击，可能属于别的 App —— 必须比包名，
+        // 否则「在微信里点了一下，两秒后番茄小说的广告跳淘宝」会被放过。
+        val tap = InputTrace.last()
+        val inputAgo = if (tap != null && origin != null && tap.pkg == origin) {
+            (now - tap.at).coerceAtLeast(0L)
+        } else {
+            Long.MAX_VALUE
+        }
+        val adSeen = origin != null && adSeenPkg == origin && now - adSeenAt <= AD_SEEN_TTL_MS
+
         val ctx = GuardDecision.Context(
             destPkg = pkg,
             destChanged = changed,
@@ -369,7 +406,11 @@ object JumpGuard {
             destIsUserDriven = destIsUserDriven,
             originIsUserDriven = origin != null && origin in AppLists.USER_DRIVEN,
             originIsAdProne = origin != null && origin in AppLists.AD_PRONE,
-            originIsShell = origin != null && AppLists.isShell(origin)
+            originIsShell = origin != null && AppLists.isShell(origin),
+            inputPkg = tap?.pkg,
+            userInputAgoMs = inputAgo,
+            inputFullscreen = tap?.fullscreen == true,
+            originAdSeenRecently = adSeen
         )
 
         val verdict = GuardDecision.decide(ctx)
@@ -399,16 +440,17 @@ object JumpGuard {
         // 结构化的一行：字段固定、顺序固定，方便脚本统计「影子模式一周里
         // 有多少次 would_back」。旧的 `guard pkg=` 行格式不动，
         // `test_guard.sh` 依赖它。
-        val shadow = Prefs.guardShadow
+        val mode = GuardDecision.modeOf(Prefs.guardShadow, Prefs.guardMode)
         android.util.Log.d(
             "AdSkip",
             "guard ctx dest=$pkg origin=$origin dt=${dt} cold=$originColdSnapshot " +
                 "splash=${originWatchedSnapshot && !originSettledSnapshot} " +
                 "settled=$originSettledSnapshot watched=$originWatchedSnapshot " +
-                "mode=${if (shadow) "shadow" else "normal"} -> ${verdict.action}"
+                "adfp=$adSeen input=$inputAgo tier=${verdict.tier} " +
+                "mode=${mode.name.lowercase()} -> ${verdict.action}"
         )
 
-        when (GuardDecision.disposition(verdict, shadow)) {
+        when (GuardDecision.disposition(verdict, mode)) {
             // 本来就不该拦
             GuardDecision.Disposition.NONE -> return
 
@@ -424,6 +466,18 @@ object JumpGuard {
                 return
             }
 
+            // 严格档 + 证据弱：保留用户的操作，只告诉一声。
+            //
+            // 不能静默——「什么都没发生」和「软件坏了」在用户眼里是同一件事。
+            GuardDecision.Disposition.NOTICE_ONLY -> {
+                android.util.Log.d("AdSkip", "guard notice-only dest=$pkg tier=${verdict.tier}")
+                SkipLog.add(
+                    "严格档：疑似广告跳转 ${pkg.substringAfterLast('.')}，已保留（${verdict.reason}）"
+                )
+                GuardNotice.showSkipped(service, pkg, origin, verdict.reason)
+                return
+            }
+
             GuardDecision.Disposition.ACT -> Unit
         }
 
@@ -435,6 +489,15 @@ object JumpGuard {
         //
         // 与其逐个案补名单，不如承认「连续三次就是用户意图」。
         // 漏拦的代价是广告多显示 5 分钟，误拦的代价是用户打不开 App。
+        // 配对熔断：这一对 (来源, 目的地) 用户撤销过，或者撤销了两次以上。
+        // 它比「连拦三次」更硬——那是推断，这是用户亲口说的。
+        if (pairLedger.isMuted(origin, pkg, now)) {
+            android.util.Log.d(
+                "AdSkip",
+                "guard pair-muted origin=$origin dest=$pkg 剩 ${pairLedger.muteLeftMs(origin, pkg, now) / 1000}s，放行"
+            )
+            return
+        }
         if (repeatGuard.isMuted(pkg, now)) {
             android.util.Log.d(
                 "AdSkip",
@@ -464,6 +527,7 @@ object JumpGuard {
         service.backOffLanding(pkg, origin)
         // 只记「真的动了手」的那几次。影子模式走不到这里。
         InterceptLedger.record(pkg, origin, now)
+        pairLedger.noteIntercept(origin, pkg, now)
         SkipLog.add("拦截跳转 ${pkg.substringAfterLast('.')}：${verdict.reason}")
         // 给用户一个出口：判错了可以点「撤销」，比再点一次 App 有用。
         GuardNotice.show(service, pkg, origin, verdict.reason)
@@ -477,13 +541,22 @@ object JumpGuard {
      * 混在一起会让「撤销」看起来没生效。
      */
     @Synchronized
-    fun muteFor(pkg: String, durationMs: Long) {
+    fun muteFor(origin: String?, pkg: String, durationMs: Long) {
         val now = SystemClock.uptimeMillis()
         repeatGuard.mute(pkg, now, durationMs)
+        // 配对账本自己算时长：同一对第二次撤销会升级到 24 小时。
+        val tripped = pairLedger.noteUndo(origin, pkg, now)
         android.util.Log.d(
             "AdSkip",
-            "guard undo-mute pkg=$pkg duration=${durationMs / 1000}s"
+            "guard undo-mute origin=$origin pkg=$pkg duration=${durationMs / 1000}s pairTripped=$tripped"
         )
+        if (tripped) {
+            val left = pairLedger.muteLeftMs(origin, pkg, now) / 60_000
+            SkipLog.add(
+                "这一对（${origin?.substringAfterLast('.') ?: "未知"} → ${pkg.substringAfterLast('.')}）" +
+                    "已连续被撤销，${left} 分钟内不再拦"
+            )
+        }
     }
 
     /**
@@ -539,6 +612,33 @@ object JumpGuard {
         android.util.Log.d("AdSkip", "guard watch ended pkg=$pkg")
     }
 
+    /**
+     * 扫描器在 [pkg] 的界面上看到了广告指纹。
+     *
+     * 只记 8 秒：摇一摇广告从渲染到落地最慢约 8 秒（见 WINDOW_LANDING_SPLASH_MS），
+     * 超过这个时长再拿它当证据就已经和本次跳转无关了。
+     *
+     * 为什么必须比包名：扫描线程可能滞后，扫的是上一个 App 的树。
+     */
+    @Synchronized
+    fun noteAdSeen(pkg: String) {
+        if (pkg.isEmpty()) return
+        adSeenPkg = pkg
+        adSeenAt = SystemClock.uptimeMillis()
+        android.util.Log.d("AdSkip", "guard adfp pkg=$pkg")
+    }
+
+    /**
+     * 这个包里最近 8 秒是否看到过广告指纹。
+     *
+     * 给 v1.5 的摇一摇前置用：传感器只负责「摇了」，指纹负责
+     * 「屏幕上是广告」。两个都成立才动手，否则走路晃两下就会把
+     * 用户正在看的页面点掉。
+     */
+    @Synchronized
+    fun adSeenRecent(pkg: String, now: Long): Boolean =
+        adSeenPkg == pkg && now - adSeenAt <= AD_SEEN_TTL_MS
+
     @Synchronized
     fun reset() {
         originPkg = null
@@ -555,6 +655,11 @@ object JumpGuard {
         // 会被上一轮的往返记录误判成「还在多窗口里」而漏拦开屏广告。
         flipHistory.clear()
         lastMultiWindowLogAt = 0L
+        // 桌面上的点击与广告指纹都不属于任何「来源」，留在手里只会
+        // 在下一次判定里冒充证据。
+        InputTrace.clear()
+        adSeenPkg = null
+        adSeenAt = 0L
     }
 
     private fun isStore(pkg: String): Boolean = AppLists.isStore(pkg)

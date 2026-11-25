@@ -4,6 +4,10 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -21,8 +25,10 @@ import com.miaotiao.adskip.data.Prefs
 import com.miaotiao.adskip.data.RuleRepository
 import com.miaotiao.adskip.engine.Access
 import com.miaotiao.adskip.engine.AppRule
+import com.miaotiao.adskip.engine.InputTrace
 import com.miaotiao.adskip.engine.Matcher
 import com.miaotiao.adskip.engine.RuleSet
+import com.miaotiao.adskip.engine.ShakeDetector
 import com.miaotiao.adskip.engine.SplashRule
 import com.miaotiao.adskip.engine.SplashScanner
 import com.miaotiao.adskip.net.RemoteRules
@@ -100,6 +106,18 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 两次点击之间的最小间隔，防止「一轮里连点好几个候选」 */
         private const val CLICK_GAP_MS = 1_200L
+
+        /**
+         * 自家点击的屏蔽窗：600ms。
+         *
+         * `Access.click` 走 ACTION_CLICK，系统仍会派发 TYPE_VIEW_CLICKED。
+         * 这个窗口内收到的点击一律当成「我们自己点的」，不记进 InputTrace。
+         * 不设它，每跳过一次广告就造出一个假用户点击。
+         */
+        private const val SELF_CLICK_MS = 600L
+
+        /** 冷启动窗口：只有在这段时间内才为「是否全屏」付一次 IPC */
+        private const val COLD_CLICK_WINDOW_MS = 3_000L
 
         /** 熔断观察窗：这段时间内同一位置被点够 BREAKER_MAX_HITS 次就停手 */
         private const val BREAKER_WINDOW_MS = 20_000L
@@ -245,6 +263,26 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 全局点击闸：两次点击至少间隔 CLICK_GAP_MS */
     private var lastClickAt = 0L
+
+    // ---------------------------------------------------------------- v1.5 实验：摇一摇前置
+    //
+    // 摇一摇全程没有点击，事件流里什么都看不到。只能在冷启动窗口里
+    // 临时听加速度计——窗口一结束立刻注销，后台零成本。
+
+    private val shakeDetector = ShakeDetector()
+    private var shakeOn = false
+
+    private val shakeListener = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) {
+            if (!shakeOn) return
+            val hit = shakeDetector.feed(
+                e.values[0], e.values[1], e.values[2], SystemClock.elapsedRealtime()
+            )
+            if (hit) onShaken()
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
 
     /** 防重复点击：key -> 上次点击时间 */
     private val clickedAt = HashMap<String, Long>()
@@ -485,6 +523,27 @@ class SkipAccessibilityService : AccessibilityService() {
      * 「用户莫名其妙被弹回去」的第二类投诉就是这么来的。
      */
     fun backOffLanding(landingPkg: String, originPkg: String?) {
+        // ---- 第 0 级：80ms 快按（v1.4.0 R8）----
+        //
+        // 落地页刚出来时，返回键常常被它的欢迎页吃掉，所以要试不止一次。
+        // 但也不能像原来那样只等 400ms —— 那 400 毫秒用户是看得见的。
+        //
+        // 这一级只在「前台确实已经是落地页」时才动手。`activePackage()` 返回
+        // null 说明还在转场，此时按返回很可能砸在**来源 App** 上（用户正在
+        // 看的那一页就没了），交给 400ms 那级。
+        main.postDelayed({
+            val h = scanHandler ?: return@postDelayed
+            h.post {
+                val cur = runCatching { activePackage() }.getOrNull()
+                if (cur != landingPkg) return@post
+                main.post {
+                    val ok = runCatching { performGlobalAction(GLOBAL_ACTION_BACK) }
+                        .getOrDefault(false)
+                    Log.i(TAG, "guard back#0 pkg=$landingPkg ok=$ok")
+                }
+            }
+        }, 80L)
+
         main.postDelayed({
             val h = scanHandler ?: return@postDelayed
             // 读窗口必须在 scanHandler 上做，主线程读会死锁（见 poller 注释）
@@ -513,7 +572,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 if (cur != landingPkg) return@post
                 main.post { guardRelaunch(landingPkg, originPkg) }
             }
-        }, 1_600L)
+        }, 1_200L)
     }
 
     /** 第 2 级：把原 App 拉回前台；1.2 秒后仍是落地页就走第 3 级 */
@@ -641,6 +700,9 @@ class SkipAccessibilityService : AccessibilityService() {
         runCatching { scanThread?.quitSafely() }
         scanThread = null
         scanHandler = null
+        // 实验组件的清理：屏蔽层是窗口，服务没了还留着就是一块点不动的透明层
+        TouchShield.destroy()
+        stopShakeWatch()
         super.onDestroy()
     }
 
@@ -669,7 +731,16 @@ class SkipAccessibilityService : AccessibilityService() {
                 }
                 // systemui 只走上面那次「用户切页」判断，不参与监测与来源维护。
                 if (pkg == "com.android.systemui") return
+                // v1.5 实验：入口证据只记日志，不参与判定
+                if (Prefs.expEntry) noteEntry(pkg, e.className?.toString())
                 onForegroundChanged(pkg, cold)
+            }
+
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                // 只记时间戳，不做任何判定。真正用它的是 JumpGuard：
+                // 「用户点了一下商品卡」和「摇一摇把淘宝拉起来」在前台切换上
+                // 完全一样，唯一的区别就是有没有这条事件。
+                noteUserClick(pkg, e)
             }
 
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
@@ -691,6 +762,124 @@ class SkipAccessibilityService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    /**
+     * 用户点了一下屏幕（v1.4.0 的输入溯源）。
+     *
+     * 只记时间戳和「是不是全屏热区」，不做任何判定。真正用它的是 JumpGuard：
+     * 「用户点了一下商品卡 → 淘宝起来了」和「摇一摇 → 淘宝起来了」在前台
+     * 切换上完全一样，唯一的区别就是前者有这条事件。
+     *
+     * **必须过滤自家点击**。`Access.click` 走的是 `ACTION_CLICK`，系统照样
+     * 会派发 `TYPE_VIEW_CLICKED`。不过滤的话，每跳过一次广告都会造出一个
+     * 假「用户点击」，之后 1.5 秒内该拦的全都不拦——这比不做还糟。
+     *
+     * 全屏判断只在冷启动窗口内做：要读 `e.source` 的 bounds，一次 IPC。
+     * 用户正常用 App 时点什么都不影响判定（那时来源早已 settled），
+     * 没必要为每一巴掌都付这次 IPC。
+     */
+    private fun noteUserClick(pkg: String, e: AccessibilityEvent) {
+        val now = SystemClock.uptimeMillis()
+        if (lastClickAt > 0L && now - lastClickAt < SELF_CLICK_MS) {
+            Log.d(TAG, "input tap pkg=$pkg ignored=self ${now - lastClickAt}ms")
+            return
+        }
+        val inColdWindow = watching && now - watchStart <= COLD_CLICK_WINDOW_MS
+        val fullscreen = inColdWindow && isFullScreenClick(e)
+        InputTrace.note(pkg, now, fullscreen, "view")
+        Log.d(TAG, "input tap pkg=$pkg fullscreen=$fullscreen cold=$inColdWindow")
+    }
+
+    /**
+     * 这次点击的目标是不是几乎铺满整块屏幕。
+     *
+     * 点击型广告（点任意位置跳转）的容器本身就是全屏 View，点它也会派发
+     * `TYPE_VIEW_CLICKED`。如果把它当成「用户在选东西」，这类广告会从
+     * 「拦」直接变成「不拦」。商品卡、按钮的面积远小于全屏，85% 这条线
+     * 能分开两者。
+     */
+    private fun isFullScreenClick(e: AccessibilityEvent): Boolean {
+        val src = runCatching { e.source }.getOrNull() ?: return false
+        return try {
+            val r = android.graphics.Rect()
+            src.getBoundsInScreen(r)
+            val dm = resources.displayMetrics
+            val screen = dm.widthPixels.toLong() * dm.heightPixels
+            if (screen <= 0L) return false
+            val w = r.width().toLong().coerceAtLeast(0L)
+            val h = r.height().toLong().coerceAtLeast(0L)
+            w * h * 100L / screen >= 85L
+        } catch (t: Throwable) {
+            false
+        } finally {
+            Access.recycle(src)
+        }
+    }
+
+    // ---------------------------------------------------------------- v1.5 实验：摇一摇前置
+
+    /** 冷启动窗口开始时挂上加速度计（只在开了实验开关时） */
+    private fun startShakeWatch() {
+        if (!Prefs.expShake || shakeOn) return
+        val sm = getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val s = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) ?: return
+        shakeDetector.reset()
+        val ok = runCatching {
+            sm.registerListener(shakeListener, s, SensorManager.SENSOR_DELAY_GAME)
+        }.getOrDefault(false)
+        if (ok) {
+            shakeOn = true
+            Log.d(TAG, "shake watch start")
+        }
+    }
+
+    private fun stopShakeWatch() {
+        if (!shakeOn) return
+        val sm = getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        runCatching { sm?.unregisterListener(shakeListener) }
+        shakeOn = false
+        shakeDetector.reset()
+        Log.d(TAG, "shake watch stop")
+    }
+
+    /**
+     * 摇了一下。只有在「屏幕上确实有广告」时才动手。
+     *
+     * 没有指纹门禁的话，走路、骑车、掏手机都会触发；而「有指纹但用户
+     * 自己想摇」的情况——把广告关掉也无害。
+     */
+    private fun onShaken() {
+        val pkg = watchPkg ?: return
+        if (!JumpGuard.adSeenRecent(pkg, SystemClock.uptimeMillis())) {
+            Log.d(TAG, "shake ignored pkg=$pkg 没有广告指纹")
+            return
+        }
+        Log.i(TAG, "shake hit pkg=$pkg 落地前处理")
+        SkipLog.add("摇一摇：在落地前处理广告（${pkg.substringAfterLast('.')}）")
+        requestScan(0L)
+    }
+
+    /**
+     * R13：目的地的首帧 Activity 是不是它的 launcher Activity。
+     *
+     * 相等 → 用户点图标 / 通知进来（意图明确）；
+     * 不等 → 大概率是 deeplink 进来的（广告）。
+     *
+     * v1.5 只记日志：很多 App 的 deeplink 也走主 Activity（淘宝 WelcomeActivity），
+     * 这个信号的强弱必须先拿真机数据看，不能直接进判定。
+     */
+    private fun noteEntry(pkg: String, cls: String?) {
+        if (cls == null) return
+        val launch = runCatching {
+            packageManager.getLaunchIntentForPackage(pkg)?.component?.className
+        }.getOrNull()
+        val kind = when {
+            launch == null -> "unknown"
+            launch == cls -> "launcher"
+            else -> "deeplink"
+        }
+        Log.d(TAG, "guard entry pkg=$pkg cls=$cls launch=$launch -> $kind")
     }
 
     /**
@@ -915,6 +1104,8 @@ class SkipAccessibilityService : AccessibilityService() {
         watchDeadline = watchStart + splash.durationMs
         watching = true
         watchCold = cold
+        // v1.5 实验：开屏窗口 = 摇一摇唯一可能发生的时间段，只在这里听传感器
+        startShakeWatch()
         // 告诉防跳转：来源 App 现在处在「可监测的开屏阶段」。
         // 这是「来源仍在开屏」这个判据的唯一依据——只有真的起了监测窗口
         // 才有资格说它还停在开屏期，没监测过的一律当作「不知道」，宁可不拦。
@@ -955,6 +1146,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         watching = false
         watchPkg = null
+        stopShakeWatch()
     }
 
     private fun currentSplash(): SplashRule? {
@@ -1157,6 +1349,17 @@ class SkipAccessibilityService : AccessibilityService() {
         // 说明这个 App 的开屏阶段已经过去。之后它再跳电商/商店，是用户自己点的，
         // 不该按返回。判定逻辑见 JumpGuard.noteContentPage。
         if (hit == null && result.contentPage) JumpGuard.noteContentPage(pkg)
+        // 广告 SDK 指纹：只记 8 秒，给 JumpGuard 划分证据档位用（v1.4.0）。
+        // 即便这一轮没命中跳过按钮也要报 —— 指纹说的是「屏幕上有广告」，
+        // 和「找没找到跳过按钮」是两件事。
+        if (result.adFingerprint) {
+            JumpGuard.noteAdSeen(pkg)
+            // v1.5 实验：确认屏幕上有广告 SDK，就盖一层触摸屏蔽，
+            // 把「点任意位置跳转」的点击吃掉。3 秒自动撤除，右下角有解除入口。
+            if (Prefs.expShield) {
+                TouchShield.cover(this@SkipAccessibilityService)
+            }
+        }
         if (hit != null) {
             val key = "splash:$pkg"
             // 同一轮里点掉之后要给足冷却：很多内容页上也有「跳过」类文字，
@@ -1225,6 +1428,9 @@ class SkipAccessibilityService : AccessibilityService() {
         ) {
             coordTapped = true
             val r = splash.coords.first()
+            // v1.5 实验：屏蔽层会吃掉 dispatchGesture 注入的触摸，
+            // 先临时撤掉再点，点完自己会盖回来。
+            TouchShield.releaseForTap(this)
             if (Access.tapAt(this, r.exactCenterX(), r.exactCenterY())) {
                 lastClickAt = now
                 Prefs.bumpSkip()
@@ -1326,7 +1532,13 @@ class SkipAccessibilityService : AccessibilityService() {
                     // recyclePath=false：祖先节点也在 tree 里，交给 finally 统一释放，
                     // 否则同一轮里后面的规则会读到已回收的节点
                     if (target != null) clicked = Access.click(this, target, screenArea, recyclePath = false)
-                    if (clicked) break
+                    if (clicked) {
+                        // 关弹窗也是一次「我们点的」。这一处原来漏了，
+                        // 后果是每关一个弹窗就造出一个假用户点击，
+                        // 之后 1.5 秒内该拦的跳转全被放过（v1.4.0 R4）。
+                        lastClickAt = SystemClock.uptimeMillis()
+                        break
+                    }
                 }
                 if (clicked) {
                     markClicked(key)

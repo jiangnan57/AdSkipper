@@ -52,7 +52,7 @@ class UndoReceiver : BroadcastReceiver() {
             ACTION_UNDO -> {
                 val dest = intent.getStringExtra(EXTRA_DEST) ?: return
                 val origin = intent.getStringExtra(EXTRA_ORIGIN)
-                JumpGuard.muteFor(dest, UNDO_MUTE_MS)
+                JumpGuard.muteFor(origin, dest, UNDO_MUTE_MS)
                 GuardNotice.cancel(ctx)
                 val ok = launch(ctx, dest)
                 Log.i(TAG, "guard undo dest=$dest origin=$origin launched=$ok")

@@ -31,7 +31,9 @@ object SplashScanner {
         val candidates: List<Candidate>,
         val bigArea: Long,
         val full: Boolean = true,
-        val contentPage: Boolean = false
+        val contentPage: Boolean = false,
+        /** 这页里有没有广告 SDK 的痕迹（见 [AdFingerprint]）。v1.4.0 只记日志 */
+        val adFingerprint: Boolean = false
     )
 
     private val COUNTDOWN = Regex("""^\d{1,2}\s*[sS秒]?$""")
@@ -149,7 +151,8 @@ object SplashScanner {
             val top = rank(fast)
             val result = Result(
                 tree.size, elapsed(t0), top.firstOrNull(), top, stats.bigArea,
-                full = false, contentPage = stats.contentPage
+                full = false, contentPage = stats.contentPage,
+            adFingerprint = stats.adFingerprint
             )
             pool.releaseExcept(top)
             return result
@@ -157,7 +160,8 @@ object SplashScanner {
         if (!full && !allowHeuristic) {
             val result = Result(
                 tree.size, elapsed(t0), null, emptyList(), stats.bigArea,
-                full = false, contentPage = stats.contentPage
+                full = false, contentPage = stats.contentPage,
+            adFingerprint = stats.adFingerprint
             )
             pool.releaseExcept(emptyList())
             return result
@@ -210,7 +214,8 @@ object SplashScanner {
         val top = rank(found)
         val result = Result(
             stats.count, elapsed(t0), top.firstOrNull(), top, stats.bigArea,
-            full = true, contentPage = stats.contentPage
+            full = true, contentPage = stats.contentPage,
+            adFingerprint = stats.adFingerprint
         )
         pool.releaseExcept(top)
         return result
@@ -229,7 +234,8 @@ object SplashScanner {
         val textCount: Int,
         val tabHits: Int,
         val adSignal: Boolean,
-        val contentPage: Boolean
+        val contentPage: Boolean,
+        val adFingerprint: Boolean = false
     )
 
     private fun pageStats(
@@ -244,6 +250,7 @@ object SplashScanner {
         var textCount = 0
         var tabHits = 0
         var adSignal = false
+        var adFingerprint = false
 
         for (n in tree) {
             count++
@@ -260,6 +267,14 @@ object SplashScanner {
             val desc = n.contentDescription
             val vid = n.viewIdResourceName
             val hasText = !text.isNullOrBlank() || !desc.isNullOrBlank()
+
+            // 广告 SDK 指纹：顺手判，零额外 IPC。短路写法是为了少一次
+            // className 读取——绝大多数节点 id 就够判了。
+            if (!adFingerprint) {
+                if (AdFingerprint.hit(vid) || AdFingerprint.hit(n.className?.toString())) {
+                    adFingerprint = true
+                }
+            }
 
             if (hasText) {
                 textCount++
@@ -291,7 +306,8 @@ object SplashScanner {
             clickable > 6 || tabHits > 0 || textCount > 55
 
         return PageStats(
-            count, bigArea, scrollArea, clickable, textCount, tabHits, adSignal, contentPage
+            count, bigArea, scrollArea, clickable, textCount, tabHits, adSignal, contentPage,
+            adFingerprint
         )
     }
 

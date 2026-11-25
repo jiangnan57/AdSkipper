@@ -62,6 +62,20 @@ object Prefs {
         set(value) = setBool("guard_shadow", value)
 
     /**
+     * 处置档位：`COMPAT`（默认）/ `STRICT` / `SHADOW`。
+     *
+     * v1.4.0 起判定分成两档证据（HIGH / LOW），`STRICT` 只对 LOW 档
+     * 「只提示、不回退」。**默认必须是 COMPAT**——LOW 里本来就有真广告，
+     * 一上来默认严格，用户看到的就是「没以前跳得勤」，等于用新问题换旧问题。
+     *
+     * 翻默认的条件写死，不靠感觉：影子模式连续 7 天，LOW 档里
+     * 「拦截后 10 秒无回访」的比例 ≥ 80% 才考虑。
+     */
+    var guardMode: String
+        get() = sp?.getString("guard_mode", "COMPAT") ?: "COMPAT"
+        set(value) = setString("guard_mode", value.trim().uppercase())
+
+    /**
      * 拦截后是否弹一条「已拦截，可撤销」的提示。
      *
      * 默认开。它是防跳转判错时用户唯一的出口——没有它，判错的代价就是
@@ -77,6 +91,39 @@ object Prefs {
     var skipAllApps: Boolean
         get() = sp?.getBoolean("skip_all", true) ?: true
         set(value) = setBool("skip_all", value)
+
+    // ------------------------------------------------------------------ 实验开关（v1.5）
+    //
+    // 三个都默认关。它们改的是「广告怎么被阻止」，不是「怎么被补救」，
+    // 一旦出问题用户连点都点不动——这种代价不该让所有人承担。
+
+    /**
+     * R11 触摸屏蔽层：确认是广告后，用无障碍覆盖层吃掉屏幕上的触摸。
+     *
+     * 默认关。风险清单见 [com.miaotiao.adskip.service.TouchShield]：
+     * 挡自己的注入点击、触发 ROM 的叠加层检测、和手势导航冲突。
+     */
+    var expShield: Boolean
+        get() = sp?.getBoolean("exp_shield", false) ?: false
+        set(value) = setBool("exp_shield", value)
+
+    /**
+     * R12 传感器前置：冷启动窗口里监听摇一摇，在落地之前把广告点掉。
+     *
+     * 默认关。只有「看到广告指纹 + 检测到摇动」才会动手，误摇不会触发。
+     */
+    var expShake: Boolean
+        get() = sp?.getBoolean("exp_shake", false) ?: false
+        set(value) = setBool("exp_shake", value)
+
+    /**
+     * R13 目的地入口证据：比对首帧 Activity 和 launcher Activity，只记日志。
+     *
+     * 默认关是因为它不影响行为，开着只是多几个 IPC。想验证信号强弱时再开。
+     */
+    var expEntry: Boolean
+        get() = sp?.getBoolean("exp_entry", false) ?: false
+        set(value) = setBool("exp_entry", value)
 
     /** 规则没命中时，是否允许用启发式识别一个候选并记住它 */
     var autoLearn: Boolean

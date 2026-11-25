@@ -31,13 +31,22 @@
 
     <string name="sw_notice">拦截后弹提示（可撤销）</string>
     <string name="sw_notice_desc">判错时点通知上的「撤销」，30 分钟内不再拦这个 App</string>
+    <string name="sw_strict">严格档：证据弱的只提示</string>
+    <string name="sw_strict_desc">误拦更少，但可能漏拦。默认（关）保持原有拦截力度</string>
+    <string name="sw_shield">实验：挡住广告上的触摸</string>
+    <string name="sw_shield_desc">确认是广告后盖一层 3 秒的透明层，防止点一下就跳走。右下角有解除按钮</string>
+    <string name="sw_shake">实验：摇一摇前置处理</string>
+    <string name="sw_shake_desc">冷启动时监听摇动，在跳转发生前就把广告关掉</string>
 
     <string name="guard_notice_channel">拦截提示</string>
     <string name="guard_notice_title">已拦截一次广告跳转</string>
-    <string name="guard_notice_text">从 %2$s 跳到了 %1$s，已自动返回</string>
-    <string name="guard_notice_text_noorigin">已从 %1$s 返回</string>
+    <string name="guard_notice_text">从 %2$s 跳到了 %1$s，已自动返回（点此撤销）</string>
+    <string name="guard_notice_text_noorigin">已从 %1$s 返回（点此撤销）</string>
     <string name="guard_notice_undo">撤销</string>
     <string name="guard_notice_mute">不再提示</string>
+    <string name="guard_skipped_title">疑似广告跳转，已保留</string>
+    <string name="guard_skipped_text">%2$s → %1$s（严格档，没有回退）</string>
+    <string name="guard_skipped_text_noorigin">没有回退 %1$s（严格档）</string>
     <string name="sw_all">对全部应用生效</string>
     <string name="sw_all_desc">关闭后只处理规则库里的应用</string>
 

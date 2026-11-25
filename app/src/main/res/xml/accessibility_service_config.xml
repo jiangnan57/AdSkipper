@@ -11,9 +11,14 @@
 
   只保留 rootInActiveWindow + 文本/内容变化事件，每次都是现问系统要，
   不依赖缓存。代价是拿不到多窗口信息，但开屏广告永远在活动窗口里。
+
+  v1.4.0 增加 typeViewClicked：防跳转要区分「用户点了商品卡」和
+  「摇一摇把淘宝拉起来」——这两件事在前台切换上完全一样，唯一的区别
+  是前者会派发点击事件。点击事件的量很小（一次触摸最多一条），
+  不会像 content-changed 那样刷屏。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagReportViewIds|flagIncludeNotImportantViews"
     android:canPerformGestures="true"

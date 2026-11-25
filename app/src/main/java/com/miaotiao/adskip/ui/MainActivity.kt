@@ -50,6 +50,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swPopup: MaterialSwitch
     private lateinit var swGuard: MaterialSwitch
     private lateinit var swShadow: MaterialSwitch
+    private lateinit var swStrict: MaterialSwitch
+    private lateinit var swShield: MaterialSwitch
+    private lateinit var swShake: MaterialSwitch
     private lateinit var swNotice: MaterialSwitch
     private lateinit var swAllApps: MaterialSwitch
     private lateinit var swLearn: MaterialSwitch
@@ -76,6 +79,9 @@ class MainActivity : AppCompatActivity() {
         swPopup = findViewById(R.id.swPopup)
         swGuard = findViewById(R.id.swGuard)
         swShadow = findViewById(R.id.swShadow)
+        swStrict = findViewById(R.id.swStrict)
+        swShield = findViewById(R.id.swShield)
+        swShake = findViewById(R.id.swShake)
         swNotice = findViewById(R.id.swNotice)
         swAllApps = findViewById(R.id.swAllApps)
         swLearn = findViewById(R.id.swLearn)
@@ -279,7 +285,11 @@ class MainActivity : AppCompatActivity() {
         swSplash.isChecked = Prefs.skipSplash
         swPopup.isChecked = Prefs.closePopups
         swGuard.isChecked = Prefs.guardJump
-        swShadow.isChecked = Prefs.guardShadow
+        val mode = Prefs.guardMode
+        swShadow.isChecked = mode == "SHADOW"
+        swStrict.isChecked = mode == "STRICT"
+        swShield.isChecked = Prefs.expShield
+        swShake.isChecked = Prefs.expShake
         swNotice.isChecked = Prefs.guardNotice
         swAllApps.isChecked = Prefs.skipAllApps
         swLearn.isChecked = Prefs.autoLearn
@@ -298,7 +308,17 @@ class MainActivity : AppCompatActivity() {
             showBlocklistDialog()
             true
         }
-        swShadow.setOnCheckedChangeListener { _, v -> Prefs.guardShadow = v }
+        // 三个档位互斥，用同一份 Prefs.guardMode 表达。
+        // 分开存两个 boolean 迟早会出现「影子和严格同时开」这种无意义状态。
+        swShadow.setOnCheckedChangeListener { _, v ->
+            Prefs.guardShadow = v
+            applyMode(if (v) "SHADOW" else "COMPAT")
+        }
+        swStrict.setOnCheckedChangeListener { _, v ->
+            applyMode(if (v) "STRICT" else "COMPAT")
+        }
+        swShield.setOnCheckedChangeListener { _, v -> Prefs.expShield = v }
+        swShake.setOnCheckedChangeListener { _, v -> Prefs.expShake = v }
         swNotice.setOnCheckedChangeListener { _, v -> Prefs.guardNotice = v }
         swAllApps.setOnCheckedChangeListener { _, v -> Prefs.skipAllApps = v }
         swLearn.setOnCheckedChangeListener { _, v -> Prefs.autoLearn = v }
@@ -306,6 +326,22 @@ class MainActivity : AppCompatActivity() {
             showLearnedDialog()
             true
         }
+    }
+
+    /**
+     * 切换处置档位，并把另外两个开关同步过去。
+     *
+     * 只改一个 boolean 是不够的：界面上有三个开关，但存储里只有一个
+     * `guardMode`。不同步的话，用户从「严格」切到「影子」，界面会同时
+     * 亮着两个，而实际行为只按其中一条走。
+     */
+    private fun applyMode(mode: String) {
+        Prefs.guardMode = mode
+        Prefs.guardShadow = mode == "SHADOW"
+        val shadow = mode == "SHADOW"
+        val strict = mode == "STRICT"
+        if (::swShadow.isInitialized && swShadow.isChecked != shadow) swShadow.isChecked = shadow
+        if (::swStrict.isInitialized && swStrict.isChecked != strict) swStrict.isChecked = strict
     }
 
     override fun onStart() {

@@ -94,6 +94,14 @@ object GuardDecision {
     const val MIN_DWELL_MS = 500L
 
     /**
+     * 「用户刚才点了一下」的有效期：1.5 秒。
+     *
+     * 用户点商品卡 → 目标 App 冷启动 → 前台事件到达，实测 1.0~1.4 秒。
+     * 给到 1.5 秒是为了覆盖冷启动慢的机器；再长就不该算「刚才那一下」了。
+     */
+    const val INPUT_WINDOW_MS = 1_500L
+
+    /**
      * 是否把 `com.android.systemui` 的某些界面当成「用户切 App 的地方」。
      *
      * 关掉它就退回 v1.3.9 的行为（systemui 一律当透明层，什么都不做），
@@ -212,6 +220,29 @@ object GuardDecision {
         /** 不该动 */
         KEEP
     }
+
+    /**
+     * 这次判定的证据强度。
+     *
+     * 两档处置（v1.4.0）用：用户可以把「证据弱的那一半」从「自动回退」
+     * 改成「只提示、不回退」。没有这个划分，只能一刀切整类打开或整类关掉。
+     *
+     * [HIGH] 有正面证据：来源仍在开屏（扫过、没进正片）、或者刚刚在来源里
+     *   看到过广告指纹。这两条都来自**观察**，不是时间推断。
+     * [LOW] 只有时间推断：来源冷启动、没进正片、落地发生得很快。
+     *   真广告占绝大多数，但用户手快也能凑出同样的时序。
+     */
+    enum class Tier { HIGH, LOW }
+
+    /**
+     * 处置档位。
+     *
+     * [COMPAT] 默认，判定与处置都保持 v1.3.x 的行为。升级不改变用户的感受。
+     * [STRICT] 只对 [Tier.LOW] 手下留情：不回退，只弹一条提示告诉用户
+     *   「刚才差点拦了一次」。误拦更少，可能漏拦。
+     * [SHADOW] 全部只记录。测量档位，不是功能。
+     */
+    enum class Mode { COMPAT, STRICT, SHADOW }
 
     /**
      * 「重复拦截」熔断器。
@@ -365,6 +396,13 @@ object GuardDecision {
      *   全局搜索）。这类包**不是 App，是找 App 的地方**，作为来源没有任何
      *   判定意义——用户从负一屏点开拼多多，和从桌面点开拼多多是同一件事。
      *   见 AppLists.SHELL。
+     * @param inputPkg 最近一次点击发生时前台的包名（null = 没有点击记录）
+     * @param userInputAgoMs 距那次点击过了多久。**默认 [Long.MAX_VALUE]**，
+     *   「没有输入」必须不等于「输入发生在 0ms 前」。默认值写 0 会把整条
+     *   防跳转全部否决掉（0 落在 0..1500 里）——这是这类信号最常见的错法。
+     * @param inputFullscreen 那次点击的目标是否几乎铺满屏幕（点击型广告热区）
+     * @param originAdSeenRecently 最近 8 秒内是否在来源里看到过广告指纹。
+     *   v1.4.0 只用于日志与 [Tier] 划分，不单独决定拦不拦。
      */
     data class Context(
         val destPkg: String,
@@ -383,18 +421,24 @@ object GuardDecision {
         val destIsUserDriven: Boolean,
         val originIsUserDriven: Boolean,
         val originIsAdProne: Boolean,
-        val originIsShell: Boolean = false
+        val originIsShell: Boolean = false,
+        val inputPkg: String? = null,
+        val userInputAgoMs: Long = Long.MAX_VALUE,
+        val inputFullscreen: Boolean = false,
+        val originAdSeenRecently: Boolean = false
     )
 
     /**
      * 判定结果。
      *
      * @param reason 人话版原因，写进日志和 App 内记录
+     * @param tier 证据强度，只有 [Action.BACK] 时才有意义
      */
     data class Verdict(
         val action: Action,
         val reason: String,
-        val windowMs: Long = 0L
+        val windowMs: Long = 0L,
+        val tier: Tier = Tier.LOW
     ) {
         val shouldBack: Boolean get() = action == Action.BACK
     }
@@ -402,8 +446,8 @@ object GuardDecision {
     private fun keep(reason: String, windowMs: Long = 0L) =
         Verdict(Action.KEEP, reason, windowMs)
 
-    private fun back(reason: String, windowMs: Long) =
-        Verdict(Action.BACK, reason, windowMs)
+    private fun back(reason: String, windowMs: Long, tier: Tier = Tier.LOW) =
+        Verdict(Action.BACK, reason, windowMs, tier)
 
     /**
      * 判定之后该怎么处置。
@@ -423,14 +467,38 @@ object GuardDecision {
         /** 该拦，但开着影子模式：只记录，不动手、不记账 */
         SHADOW,
 
+        /**
+         * 该拦，但证据弱且用户选了严格档：只提示，不回退。
+         *
+         * 它必须是一个**独立**的处置，不能塞进 [NONE]——用户需要知道
+         * 「刚才有一次没拦」，否则严格档看起来就是「软件坏了」。
+         */
+        NOTICE_ONLY,
+
         /** 真的动手 */
         ACT
     }
 
-    fun disposition(v: Verdict, shadow: Boolean): Disposition = when {
+    /**
+     * 判定之后该怎么处置。
+     *
+     * 影子模式的全部约束都收在这一个函数里。
+     */
+    fun disposition(v: Verdict, mode: Mode): Disposition = when {
         !v.shouldBack -> Disposition.NONE
-        shadow -> Disposition.SHADOW
+        mode == Mode.SHADOW -> Disposition.SHADOW
+        // 严格档只对「纯时间推断」留手。有正面证据的那一半照拦——
+        // 否则严格档就成了「关掉防跳转」的另一个名字。
+        mode == Mode.STRICT && v.tier == Tier.LOW -> Disposition.NOTICE_ONLY
         else -> Disposition.ACT
+    }
+
+    /** 兼容旧调用：影子开关 → 档位 */
+    fun modeOf(shadow: Boolean, stored: String?): Mode = when {
+        shadow -> Mode.SHADOW
+        stored == "STRICT" -> Mode.STRICT
+        stored == "SHADOW" -> Mode.SHADOW
+        else -> Mode.COMPAT
     }
 
     /**
@@ -466,6 +534,25 @@ object GuardDecision {
         // ③ 没有来源就无从判断是「从哪跳过来的」，一律放过。
         if (c.originPkg.isNullOrEmpty()) {
             return keep("没有来源 App")
+        }
+
+        // ③'' 用户刚刚在来源 App 里自己点了一下。
+        //
+        // 「点商品卡 → 淘宝起来」和「摇一摇 → 淘宝起来」在前台切换上**一模一样**：
+        // 时间、包名、来源全同。唯一的区别是前者会派发 TYPE_VIEW_CLICKED。
+        // 这是整条判定链里第一条来自**输入层**的证据，不是推断。
+        //
+        // 三个约束都不能少：
+        //   · `inputPkg != null` —— 否则「没有输入」会和「没有来源」凑成 null == null
+        //   · `!inputFullscreen` —— 点击型广告的容器也是普通 View，点任意位置都派发
+        //     click。全屏点击（覆盖 >85%）在 service 侧就被标成 fullscreen，这里不认，
+        //     否则整整一类广告会从「拦」变成「不拦」
+        //   · `in 0..1500` —— 默认值 [Context.userInputAgoMs] 是 MAX_VALUE，
+        //     不会落进这个区间。「没输入」必须不等于「输入发生在 0ms 前」
+        if (!c.inputFullscreen && c.inputPkg != null && c.inputPkg == c.originPkg &&
+            c.userInputAgoMs in 0..INPUT_WINDOW_MS
+        ) {
+            return keep("用户 ${c.userInputAgoMs}ms 前在来源里自己点了一下")
         }
 
         // ③' 来源是系统外壳（桌面 / 负一屏 / 控制中心插件 / 全局搜索）。
@@ -534,9 +621,17 @@ object GuardDecision {
 
         // ⑩ 来源是否「像广告」——这一步才是真正的实质判断。
         val originOk = when {
-            // 应用商店：正常用户不会在 App 刚起来 5 秒内自己点进商店，
-            // 误触概率极高，不限来源。
-            c.destIsStore -> true
+            // 应用商店：v1.4.0 起不再无条件放行。
+            //
+            // 旧写法是 `c.destIsStore -> true`，等于「5 秒内谁进商店都拦」。
+            // 报告里 D2 指的就是它：连 `originSettled` 都不看，用户在
+            // 某个 App 里点「检查更新」也会被弹回来。
+            //
+            // 现在要求二者之一：
+            //   · 刚刚在来源里看到过广告指纹（观察）
+            //   · 来源冷启动、没进正片，而且这一下不是用户点的（推断）
+            c.destIsStore -> c.originAdSeenRecently ||
+                (c.originCold && !c.originSettled && c.userInputAgoMs > INPUT_WINDOW_MS)
 
             // 电商落地页：必须是「来源 App 刚打开就被弹走」。
             // 三个条件缺一不可：
@@ -565,15 +660,22 @@ object GuardDecision {
         if (!originOk) {
             return keep(
                 "来源不像广告（cold=${c.originCold} settled=${c.originSettled} " +
-                    "splash=${c.originShowingSplash} adProne=${c.originIsAdProne}）",
+                    "splash=${c.originShowingSplash} adProne=${c.originIsAdProne} " +
+                    "adSeen=${c.originAdSeenRecently} inputAgo=${c.userInputAgoMs}）",
                 window
             )
         }
 
+        // 证据强度：有「仍在开屏」或「刚看到过广告指纹」这两条观察，
+        // 才算 HIGH。其余（冷启动 + 落地很快）都是时间推断。
+        val tier = if (c.originShowingSplash || c.originAdSeenRecently) Tier.HIGH else Tier.LOW
+
         return back(
             "像广告跳转（来源 ${c.originPkg}，${c.dtMs}ms，cold=${c.originCold} " +
-                "splash=${c.originShowingSplash}）",
-            window
+                "splash=${c.originShowingSplash}" +
+                (if (c.originAdSeenRecently) " adfp=true" else "") + "）",
+            window,
+            tier
         )
     }
 }
