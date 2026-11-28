@@ -1,10 +1,14 @@
 package com.miaotiao.adskip.util
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import com.miaotiao.adskip.BuildConfig
+import java.util.concurrent.Executors
 
 /**
  * 「导出诊断」——把现场环境 + 运行记录拼成一段文本，交给系统分享。
@@ -17,14 +21,29 @@ import com.miaotiao.adskip.BuildConfig
  *
  * 也不再「没有记录就不让导出」：**一条记录都没有本身就是结论**
  * （服务从没连上过），恰恰是最需要看到的那一种现场。
+ *
+ * ## v1.9.3：拼装挪到后台线程
+ *
+ * 拼这段文本要做的事比看上去重：读机型/ROM/三项权限，还要
+ * `RuleRepository.load()` 解析一次完整规则（远程库 4MB JSON + 枚举已安装包）。
+ * 这些原来全在点击回调里跑，低端机上一按就是几百毫秒白屏，
+ * 系统甚至可能直接判 ANR。现在只在后台线程拼，拼完再回主线程弹分享面板。
  */
 object LogExport {
+
+    private val io = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "adskip-diagnose").apply { isDaemon = true }
+    }
+
+    // 必须是 lazy：这个 object 在 JVM 单测里也会被加载（测 composeCompact），
+    // 而单测环境没有 Looper，构造 Handler 会当场抛 ExceptionInInitializerError。
+    private val main by lazy { Handler(Looper.getMainLooper()) }
 
     /** 分享主题，方便对方在微信/邮件里一眼认出这是什么 */
     fun subject(): String = "秒跳诊断 v" + BuildConfig.VERSION_NAME
 
-    fun build(activity: Activity): String {
-        val head = Diagnostics.build(activity)
+    fun build(ctx: Context): String {
+        val head = Diagnostics.build(ctx)
         val lines = SkipLog.snapshot()
         return buildString {
             append(head)
@@ -46,8 +65,8 @@ object LogExport {
      * 完整记录可能有上万字，微信聊天里会被折叠、问卷的多行填空也不适合贴那么长，
      * 而排查「昨天那次为什么没跳」根本用不到第 180 条。
      */
-    fun compact(activity: Activity, limit: Int): String =
-        composeCompact(Diagnostics.build(activity), SkipLog.snapshot(), limit)
+    fun compact(ctx: Context, limit: Int): String =
+        composeCompact(Diagnostics.build(ctx), SkipLog.snapshot(), limit)
 
     /**
      * 拼装逻辑做成纯函数，好让单测钉住「截断了有没有说清总数」。
@@ -70,21 +89,28 @@ object LogExport {
         }
 
     fun share(activity: Activity) {
-        val text = runCatching { build(activity) }.getOrElse {
-            Toast.makeText(activity, "生成诊断失败", Toast.LENGTH_SHORT).show()
-            return
-        }
-        // 同步写一条 logcat：用户点了导出但没发出去（或者发的渠道我们收不到）时，
-        // 只要人还在电脑旁，`adb logcat -s AdSkip` 就能拿到同一份现场
-        runCatching { Log.i("AdSkip", text.lineSequence().take(20).joinToString("\n")) }
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, subject())
-            putExtra(Intent.EXTRA_TEXT, text)
-        }
-        runCatching { activity.startActivity(Intent.createChooser(send, "导出诊断")) }
-            .onFailure {
-                Toast.makeText(activity, "没有可用的分享应用", Toast.LENGTH_SHORT).show()
+        val ctx = activity.applicationContext
+        io.execute {
+            val text = runCatching { build(ctx) }.getOrNull()
+            main.post {
+                if (activity.isFinishing || activity.isDestroyed) return@post
+                if (text == null) {
+                    Toast.makeText(activity, "生成诊断失败", Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                // 同步写一条 logcat：用户点了导出但没发出去（或者发的渠道我们收不到）时，
+                // 只要人还在电脑旁，`adb logcat -s AdSkip` 就能拿到同一份现场
+                runCatching { Log.i("AdSkip", text.lineSequence().take(20).joinToString("\n")) }
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, subject())
+                    putExtra(Intent.EXTRA_TEXT, text)
+                }
+                runCatching { activity.startActivity(Intent.createChooser(send, "导出诊断")) }
+                    .onFailure {
+                        Toast.makeText(activity, "没有可用的分享应用", Toast.LENGTH_SHORT).show()
+                    }
             }
+        }
     }
 }

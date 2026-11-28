@@ -50,28 +50,44 @@ object Feedback {
 
     private const val CLIP_LABEL = "秒跳诊断"
 
-    fun start(activity: Activity) {
-        val text = runCatching { LogExport.compact(activity, RECENT) }.getOrElse {
-            toast(activity, R.string.feedback_failed)
-            return
-        }
-        if (!copy(activity, text)) {
-            toast(activity, R.string.feedback_failed)
-            return
-        }
-        // 与「导出诊断」同一条路子：logcat 里也留一份。
-        // 对方点了反馈却始终没把内容发出来时，这是唯一还能捞到的现场。
-        runCatching { Log.i("AdSkip", text.lineSequence().take(20).joinToString("\n")) }
+    /**
+     * 拼诊断要解析整份规则库，不能在点击回调里同步做（会把界面卡住几百毫秒）。
+     * 和 [LogExport] 一样：后台拼，回主线程再复制 + 弹窗。
+     */
+    private val io = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "adskip-feedback").apply { isDaemon = true }
+    }
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
-        val ready = QUESTIONNAIRE_URL.isNotBlank()
-        AlertDialog.Builder(activity)
-            .setTitle(R.string.feedback_title)
-            .setMessage(R.string.feedback_msg)
-            .setPositiveButton(if (ready) R.string.feedback_go else R.string.feedback_ok) { _, _ ->
-                if (ready) open(activity, QUESTIONNAIRE_URL)
+    fun start(activity: Activity) {
+        val ctx = activity.applicationContext
+        io.execute {
+            val text = runCatching { LogExport.compact(ctx, RECENT) }.getOrNull()
+            main.post {
+                if (activity.isFinishing || activity.isDestroyed) return@post
+                if (text == null) {
+                    toast(activity, R.string.feedback_failed)
+                    return@post
+                }
+                if (!copy(activity, text)) {
+                    toast(activity, R.string.feedback_failed)
+                    return@post
+                }
+                // 与「导出诊断」同一条路子：logcat 里也留一份。
+                // 对方点了反馈却始终没把内容发出来时，这是唯一还能捞到的现场。
+                runCatching { Log.i("AdSkip", text.lineSequence().take(20).joinToString("\n")) }
+
+                val ready = QUESTIONNAIRE_URL.isNotBlank()
+                AlertDialog.Builder(activity)
+                    .setTitle(R.string.feedback_title)
+                    .setMessage(R.string.feedback_msg)
+                    .setPositiveButton(if (ready) R.string.feedback_go else R.string.feedback_ok) { _, _ ->
+                        if (ready) open(activity, QUESTIONNAIRE_URL)
+                    }
+                    .setNegativeButton(R.string.feedback_cancel, null)
+                    .show()
             }
-            .setNegativeButton(R.string.feedback_cancel, null)
-            .show()
+        }
     }
 
     /**

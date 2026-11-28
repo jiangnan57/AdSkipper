@@ -156,8 +156,13 @@ object RemoteRules {
                 finish(true, msg)
                 Log.i(TAG, "remote rules synced: ${stats.records} records, ${body.length} chars, $host")
                 return Result(true, msg, stats.records, stats.splashApps, stats.popupApps, host)
-            } catch (e: Exception) {
-                lastError = friendlyError(e)
+            } catch (t: Throwable) {
+                // 这里必须接 Throwable，不只是 Exception：规则解析是递归下降，
+                // 一份刻意构造的深层嵌套 JSON 会抛 StackOverflowError。
+                // 它是 Error，漏出去就会被当成未捕获异常，直接把整个进程带走——
+                // 而下一次打开还会再拉同一份文件，于是变成一开就崩。
+                // 解析失败只是「这路镜像不可用」，继续试下一路才对。
+                lastError = friendlyError(t)
                 Log.i(TAG, "remote mirror failed: ${candidate.substringBefore('?')} -> $lastError")
             }
         }
@@ -258,12 +263,14 @@ object RemoteRules {
         return "$prefix$v · ${stats.records} 条"
     }
 
-    private fun friendlyError(e: Exception): String = when (e) {
+    private fun friendlyError(e: Throwable): String = when (e) {
         is UnknownHostException -> "域名解析失败，请检查网络"
         is SocketTimeoutException -> "连接或读取超时"
         is SSLException -> "HTTPS 证书校验失败"
         is IllegalArgumentException -> e.message ?: "规则格式不正确"
         is IllegalStateException -> e.message ?: "网络响应异常"
+        is OutOfMemoryError -> "规则文件太大，内存不足"
+        is StackOverflowError -> "规则格式异常，已跳过"
         else -> e.message?.take(80) ?: e.javaClass.simpleName
     }
 

@@ -1,11 +1,14 @@
 package com.miaotiao.adskip.util
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 「最近记录」——内存环形日志 + **落盘**。
@@ -52,6 +55,22 @@ object SkipLog {
     private var lastFlushAt = 0L
 
     /**
+     * 回调必须回主线程。
+     *
+     * 这个类的调用方遍布三个线程：主线程（服务连接、界面操作）、扫描线程
+     * （跳过 / 关弹窗）、规则加载线程。而监听者全是界面（首页副标题、
+     * 记录页列表）。原来直接 `listeners.forEach { it() }`，于是扫描线程
+     * 写一条日志就会在扫描线程上碰 TextView —— 抛
+     * `CalledFromWrongThreadException`，又被外层的 runCatching 吞掉：
+     * 界面不刷新，日志里还什么都没有，看起来就是「这个功能时好时坏」。
+     *
+     * 现在统一 post 到主线程，并用一个 pending 标记合并同一帧内的多次通知：
+     * 一次跳广告可能连着写三四条，没必要重绘四遍。
+     */
+    private var mainHandler: Handler? = null
+    private val notifyPending = AtomicBoolean(false)
+
+    /**
      * 绑定落盘位置并把历史记录载回内存。重复调用无副作用。
      *
      * 必须在 Application 或 Service 起来时尽早调用，否则崩溃前的记录
@@ -59,6 +78,9 @@ object SkipLog {
      */
     @Synchronized
     fun install(ctx: Context) {
+        if (mainHandler == null) {
+            mainHandler = runCatching { Handler(Looper.getMainLooper()) }.getOrNull()
+        }
         if (file != null) return
         val f = File(ctx.filesDir, FILE_NAME)
         file = f
@@ -77,7 +99,7 @@ object SkipLog {
     fun add(msg: String) {
         items.addFirst(fmt.format(Date()) + "  " + msg)
         while (items.size > MAX) items.removeLast()
-        listeners.toList().forEach { runCatching { it() } }
+        notifyListeners()
         maybeFlush()
     }
 
@@ -87,9 +109,31 @@ object SkipLog {
     @Synchronized
     fun clear() {
         items.clear()
-        listeners.toList().forEach { runCatching { it() } }
+        notifyListeners()
         val f = file ?: return
         io.execute { runCatching { if (f.exists()) f.delete() } }
+    }
+
+    /**
+     * 通知全部监听者。**永远在主线程执行**（见 [mainHandler] 的注释）。
+     *
+     * 没有主线程 Handler（JVM 单测里 install 不会被调用）时退化成同步调用，
+     * 单测里那点逻辑不涉及界面，行为与以前一致。
+     */
+    private fun notifyListeners() {
+        val handler = mainHandler
+        if (handler == null) {
+            listeners.toList().forEach { runCatching { it() } }
+            return
+        }
+        // 已经排了一次就不再排：一次扫描写三四条日志不该重绘三四遍
+        if (!notifyPending.compareAndSet(false, true)) return
+        handler.post {
+            notifyPending.set(false)
+            // 取快照时重新加锁：期间可能有界面 onStop 注销了监听
+            val snapshot = synchronized(this) { listeners.toList() }
+            snapshot.forEach { runCatching { it() } }
+        }
     }
 
     @Synchronized

@@ -123,7 +123,11 @@ object RuleRepository {
             for (hash in entry.keys()) {
                 val app = RuleDocument.objectValue(entry.opt(hash)) ?: continue
                 val explicit = app.optString("packageName").trim()
+                // 和 applyObject 同一条约束：包名长度没有上限时，一份恶意规则文件
+                // 可以塞进几百万字符的 key，白占内存且在日志里刷屏
+                if (explicit.length > 200) continue
                 val pkg = explicit.ifBlank { byHash[hash.toIntOrNull()] } ?: continue
+                if (pkg.isBlank() || pkg.length > 200) continue
                 val b = builders.getOrPut(pkg) { AppBuilder(pkg) }
                 applyJson(app, b)
                 b.origin = origin

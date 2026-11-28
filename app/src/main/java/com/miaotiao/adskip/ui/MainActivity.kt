@@ -330,25 +330,53 @@ class MainActivity : AppCompatActivity() {
         intent?.let { handleDeepLink(it) }
     }
 
-    /** 深链只提供便捷导入，必须经用户确认，避免网页静默替换点击规则。 */
+    /**
+     * 深链只提供便捷导入，必须经用户确认，避免网页静默替换点击规则。
+     *
+     * 这个入口是**唯一**能被外部写配置的地方（`miaotiao://sync?url=`），
+     * 任何网页、任何 App 都能拉起它，所以除了「必须点确认」之外还有三道闸：
+     *
+     * 1. 只收 https。规则就是「在谁界面上点哪里」，明文地址等于把点击权
+     *    交给同一个 WiFi 里的人；`RemoteRules` 虽然也会拒，但不该等它拒。
+     * 2. 长度封顶 2048、不许含空白。否则弹窗里能塞进一整段假说明，
+     *    或者几百行的地址列表骗人点「信任」。
+     * 3. 弹窗只显示域名，不整段回显用户可控文本。
+     */
     private fun handleDeepLink(intent: Intent?) {
         val data: Uri = intent?.data ?: return
+        // 先消费掉，避免旋转屏幕 / Activity 重建时重复弹
+        intent.data = null
         if (data.scheme != "miaotiao" || data.host != "sync") return
+
         val url = data.getQueryParameter("url")?.trim().orEmpty()
         if (url.isEmpty()) {
             toast("缺少 url 参数")
             return
         }
+        if (url.length > 2048 || url.any { it.isWhitespace() }) {
+            toast("规则地址不合法，已忽略")
+            return
+        }
+        val parsed = runCatching { java.net.URI(url) }.getOrNull()
+        val host = parsed?.host.orEmpty()
+        if (!parsed?.scheme.equals("https", ignoreCase = true) || host.isBlank()) {
+            toast("规则地址必须是 https://…")
+            return
+        }
+
         AlertDialog.Builder(this)
             .setTitle("导入远程规则？")
-            .setMessage("规则会控制自动点击，请只导入你信任的来源：\n\n$url")
+            .setMessage(
+                "规则会控制自动点击，请只导入你信任的来源。\n\n" +
+                    "来源：$host\n" +
+                    "地址：${url.take(160)}"
+            )
             .setPositiveButton("信任并同步") { _, _ ->
                 Prefs.remoteUrl = url
                 syncRemote(force = true)
             }
             .setNegativeButton("取消", null)
             .show()
-        intent.data = null
     }
 
     private fun bindSwitches() {

@@ -70,7 +70,19 @@ class RulesActivity : AppCompatActivity() {
     // ------------------------------------------------------------------ 规则库
 
     private fun refreshLib() {
-        val meta = RemoteRules.cachedMeta(this)
+        // 读的是 4MB 的 rules.json：解一次 JSON 在低端机上要一两百毫秒，
+        // 放在 onCreate 里做就是「点进规则管理先白屏一下」。
+        tvLib.text = "读取中…"
+        Thread {
+            val meta = RemoteRules.cachedMeta(this)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                applyLib(meta)
+            }
+        }.start()
+    }
+
+    private fun applyLib(meta: RemoteRules.Meta?) {
         // 只留「版本 / 条数 / 更新日期」三样。加一行「上次拉取时间」会挤到第三行，
         // 第三行一换行，卡片高度就跳，看一眼像界面坏了。
         tvLib.text = when {
@@ -109,20 +121,24 @@ class RulesActivity : AppCompatActivity() {
         tvHint.text = ""
         tvLibMsg.visibility = android.view.View.VISIBLE
         tvLibMsg.text = "正在拉取…"
-        val before = RemoteRules.cachedMeta(this)?.version ?: 0
 
         Thread {
-            val r = RemoteRules.sync(applicationContext, url, force = true)
+            val ctx = applicationContext
+            // 版本号也在这里算：cachedMeta 要解 4MB JSON，放主线程和同步本身一样卡
+            val before = RemoteRules.cachedMeta(ctx)?.version ?: 0
+            val r = RemoteRules.sync(ctx, url, force = true)
+            val afterMeta = if (r.ok) RemoteRules.cachedMeta(ctx) else null
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 syncing = false
                 btnLibSync.isEnabled = true
                 btnLibSync.text = "获取最新规则"
-                refreshLib()
+                // 失败时不动卡片：同步失败不代表本地那份没了，重画成「还没下载过」只会更误导
+                if (r.ok) applyLib(afterMeta) else refreshLib()
                 if (r.ok) {
                     // 不 reload 的话，新规则要等下一次服务重启才生效
                     SkipAccessibilityService.instance?.reloadRules()
-                    val after = RemoteRules.cachedMeta(this)?.version ?: 0
+                    val after = afterMeta?.version ?: 0
                     val upgrade = if (before > 0 && after > before) "（v$before → v$after）" else ""
                     // 不是默认那条线就说出来：用户排查「为什么版本不对」时，
                     // 第一件事就是确认这次到底从哪儿拉的
@@ -334,8 +350,10 @@ class RulesActivity : AppCompatActivity() {
             val shape = if (doc is JSONObject) "对象格式" else "数组格式"
             "格式正确（$shape），共 ${stats.records} 个应用规则" +
                 "（开屏 ${stats.splashApps} / 弹窗 ${stats.popupApps}）"
-        } catch (e: Exception) {
-            "JSON 格式错误：${e.message}"
+        } catch (t: Throwable) {
+            // 用户自己粘进来的 JSON 也可能把解析器搞崩（深层嵌套 → StackOverflowError）。
+            // 这里只该显示「格式错误」，不该让进程退出。
+            "JSON 格式错误：${t.message ?: t.javaClass.simpleName}"
         }
     }
 

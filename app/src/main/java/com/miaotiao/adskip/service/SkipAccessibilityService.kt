@@ -210,10 +210,21 @@ class SkipAccessibilityService : AccessibilityService() {
     @Volatile
     private var watching = false
 
+    /**
+     * 本轮监测的目标包与时间窗。
+     *
+     * 这三个字段主线程写（窗口事件 → startWatch）、扫描线程读（doScan）。
+     * 不加 @Volatile 的话，JMM 允许扫描线程一直读到旧值：典型表现是
+     * 「刚切到新 App，扫描线程还在扫上一个包」，点击就落在别的应用界面上。
+     * `watching` 是 volatile 只能保证它自己可见，保证不了这三个。
+     */
     @Volatile
     private var watchPkg: String? = null
+    @Volatile
     private var watchToken = 0
+    @Volatile
     private var watchStart = 0L
+    @Volatile
     private var watchDeadline = 0L
 
     /**
@@ -242,6 +253,9 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastLearnAt = 0L
     private var watchScans = 0
     private var watchCost = 0L
+
+    /** 扫描线程写、主线程读（stopWatch 判断要不要记「看到广告页但没跳过」），必须 volatile */
+    @Volatile
     private var watchHit = false
 
     /**
@@ -252,6 +266,7 @@ class SkipAccessibilityService : AccessibilityService() {
      * 每次都记一条「未找到跳过按钮」，看起来像功能天天在失效。
      * 只有真的见过广告页却没点掉，那条记录才有意义。
      */
+    @Volatile
     private var sawAdPage = false
 
     /** 这一轮监测是不是「从桌面/后台冷启动」进来的。自识别只在这种场景下启用 */
@@ -291,7 +306,14 @@ class SkipAccessibilityService : AccessibilityService() {
     private var heurRect: android.graphics.Rect? = null
     private var heurSeen = 0
 
-    /** 全局点击闸：两次点击至少间隔 CLICK_GAP_MS */
+    /**
+     * 全局点击闸：两次点击至少间隔 CLICK_GAP_MS。
+     *
+     * 扫描线程写（每次点击后），主线程读（noteUserClick 用它过滤「是不是我们
+     * 自己点的」）。跨线程可见性必须靠 volatile：读不到最新值，我们自己的点击
+     * 就会被当成用户输入，随后 1.5 秒内该拦的跳转全部放行。
+     */
+    @Volatile
     private var lastClickAt = 0L
 
     // ---------------------------------------------------------------- v1.5 实验：摇一摇前置
