@@ -72,6 +72,8 @@ base.json（社区快照，原样）  +  overrides.json（自己维护的修正�
   30 秒总预算内依次尝试，结果里写明实际来源域名。
 
 维护方式见 [`rules_server/README.md`](rules_server/README.md)。
+收到用户回传的规则（问卷 [28867380](https://wj.qq.com/s2/28867380/8kz9/)）不用手抄：
+`python tools/from_survey.py 导出.xlsx` 会把整张表扫一遍并写进 `overrides.json`。
 
 ## v1.8.0 做了什么：现场学一条弹窗规则
 
