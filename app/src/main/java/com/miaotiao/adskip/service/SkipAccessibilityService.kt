@@ -1895,7 +1895,12 @@ class SkipAccessibilityService : AccessibilityService() {
         reloadRules()
         val app = teachAppName.ifBlank { teachPkg }
         SkipLog.add("学会弹窗 · $app · 点 ${target.label()}")
-        toast("已学会：出现「$anchor」时点 ${target.label()}")
+        // 最常见的形态是「条件」和「动作」是同一个按钮（如「稍后再看」），
+        // 照模板说出来会变成「出现『稍后再看』时点 稍后再看」，读着像重复了两遍
+        toast(
+            if (anchor == target.label()) "已学会：看到「$anchor」就直接点它"
+            else "已学会：出现「$anchor」时点 ${target.label()}"
+        )
     }
 
 

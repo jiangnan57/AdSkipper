@@ -133,6 +133,8 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
+        findViewById<View>(R.id.rowTeach).setOnClickListener { startTeachMode() }
+
         findViewById<View>(R.id.rowRules).apply {
             setOnClickListener { startActivity(Intent(this@MainActivity, RulesActivity::class.java)) }
             // 长按看「自动学习」攒下的记录，原来是挂在自动学习开关上的。
@@ -586,10 +588,47 @@ class MainActivity : AppCompatActivity() {
         if (due) syncRemote(force = false)
     }
 
-    // ------------------------------------------------------------------ 自检
+    // ------------------------------------------------------------------ 自检 / 学弹窗
+
+    /**
+     * 「教它关弹窗」。
+     *
+     * 学习必须发生在弹窗所在的那个 App 里，而那时用户已经切走了，
+     * 回不来点按钮——所以只能先把这个球放到屏幕上，让他去那边点。
+     * 也就是说：这个入口只负责「放球」，真正的学习在球上。
+     */
+    private fun startTeachMode() {
+        if (AccessUtil.state(this) != AccessState.CONNECTED) {
+            toast(getString(R.string.teach_error_access))
+            openAccessibilitySettings()
+            return
+        }
+        if (!AccessUtil.canDrawOverlay(this)) {
+            toast(getString(R.string.teach_error_overlay))
+            runCatching {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+            return
+        }
+        startService(
+            Intent(this, InspectorService::class.java)
+                .putExtra(InspectorService.EXTRA_TEACH, true)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(R.string.teach_title)
+            .setMessage(R.string.teach_msg)
+            .setPositiveButton("知道了", null)
+            .show()
+    }
 
     private fun toggleInspector() {
-        if (InspectorService.running) {
+        // 已经开着的如果是「学」球，这一次长按就把它换成「检」球，而不是关掉再开
+        if (InspectorService.running && !InspectorService.teachMode) {
             stopService(Intent(this, InspectorService::class.java))
             toast("已关闭")
             return

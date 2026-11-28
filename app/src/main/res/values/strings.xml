@@ -43,6 +43,14 @@
     <string name="section_log">运行记录</string>
     <string name="title_rules">规则管理</string>
 
+    <!-- 学弹窗 -->
+    <string name="btn_teach">教它关弹窗</string>
+    <string name="teach_sub">弹广告时点两下，现场学会</string>
+    <string name="teach_title">「学」球已放到屏幕右侧</string>
+    <string name="teach_msg">1. 切到弹广告的那个 App，等弹窗出来\n2. 点一下「学」球\n3. 再点弹窗上那个关不掉的按钮\n\n学会后立刻生效，当前这个弹窗当场就会关掉。\n\n读不出文字、也没有控件 id 的按钮学不了——那种只能靠位置猜，点错会跳到广告落地页。\n\n长按「学」球可以把它收起来。</string>
+    <string name="teach_error_access">无障碍没连上，先把这一步修好</string>
+    <string name="teach_error_overlay">需要「显示在其他应用上层」权限，开完返回再点一次</string>
+
     <!-- 运行记录页 -->
     <string name="title_log">运行记录</string>
     <string name="btn_export">导出诊断</string>

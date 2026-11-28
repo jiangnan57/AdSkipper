@@ -20,25 +20,41 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * 自检 / 节点探测器：在任意界面上显示一个悬浮球，点一下就能：
- *   - 「自检」：用真实规则跑一遍识别，告诉你命中了什么、为什么没命中
- *   - 「节点树」：把当前窗口完整 dump 出来，写规则时照着抄
- *   - 「记住」：把当前屏幕上最像跳过按钮的那个节点直接写进规则
+ * 屏幕上的一个小球，有两种模式，由启动时的 extra 决定：
  *
- * 这三个按钮合起来就是「让手机自己检测」的入口：
- * 不用连电脑，切到目标 App 点一下球就知道结果。
+ * **学弹窗（用户用）** — 球是琥珀色的「学」，点一下就把当前界面压成候选，
+ * 再点弹窗上那个关不掉的按钮就学会了。入口在首页「教它关弹窗」。
+ *
+ * **自检 / 节点探测器（排查用）** — 球是蓝色的「检」，点一下跑一遍识别，
+ * 告诉你命中什么、为什么没命中，还能 dump 整棵节点树。入口是长按标题 1.5 秒。
+ *
+ * 两种模式共用一个球，但颜色和字不同：用户不该看到「检」这种东西，
+ * 也不该在「检」上找不到他要的「学」。
  */
 class InspectorService : Service() {
 
     companion object {
+        /** 带这个 extra 启动 = 学弹窗模式 */
+        const val EXTRA_TEACH = "teach"
+
+        /** 学弹窗模式的自动收起：一直挂着的小球迟早会变成屏幕上的一个疙瘩 */
+        const val AUTO_FOLD_MS = 120_000L
+
         @Volatile
         var running: Boolean = false
+            private set
+
+        @Volatile
+        var teachMode: Boolean = false
             private set
     }
 
     private lateinit var wm: WindowManager
     private var ball: View? = null
     private var panel: View? = null
+
+    /** 学弹窗模式的自动收起：一直挂着的小球迟早会变成屏幕上的一个疙瘩 */
+    private var autoFold: Runnable? = null
 
     /**
      * 自检必须跑在后台线程。
@@ -72,13 +88,27 @@ class InspectorService : Service() {
         super.onCreate()
         running = true
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        addBall()
+        // 球不在这里挂：Service 拿不到启动它的 Intent，模式要等 onStartCommand。
+        // 先挂一个「检」再换成「学」，用户会看到球闪一下。
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
+    /**
+     * 球已经在屏幕上时又被启动一次（比如先开着自检，再点首页的「教它关弹窗」）：
+     * 换模式而不是再挂一个小球——两个球叠在一起，谁也点不准。
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val want = intent?.getBooleanExtra(EXTRA_TEACH, false) ?: false
+        if (ball == null || want != teachMode) {
+            teachMode = want
+            removeBall()
+            addBall()
+        }
+        return START_NOT_STICKY
+    }
 
     override fun onDestroy() {
         running = false
+        autoFold?.let { ui.removeCallbacks(it) }
         runCatching { worker.shutdownNow() }
         removeBall()
         removePanel()
@@ -88,17 +118,22 @@ class InspectorService : Service() {
     // ------------------------------------------------------------------ 悬浮球
 
     private fun addBall() {
-        val size = dp(46)
+        val teach = teachMode
+        // 学弹窗的球大一圈：它要在别的 App 里被手指戳中，而且常常是单手
+        val size = dp(if (teach) 54 else 46)
         val blue = 0xE61E6FE0.toInt()
         val amber = 0xE6D9822B.toInt()
+        val base = if (teach) amber else blue
+        val baseText = if (teach) "学" else "检"
+
         val view = TextView(this).apply {
-            text = "检"
+            text = baseText
             setTextColor(Color.WHITE)
-            textSize = 15f
+            textSize = if (teach) 17f else 15f
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(blue)
+                setColor(base)
             }
         }
 
@@ -113,6 +148,17 @@ class InspectorService : Service() {
             x = dp(8)
         }
 
+        // 学弹窗模式：两分钟没人碰就自己收起来。用户很可能学完就忘了它，
+        // 而一个常驻在最上层的球是那种「看着就烦、又不敢点」的东西。
+        if (teach) {
+            val foldLater = Runnable {
+                toast("「学」球已自动收起，要再用点首页的「教它关弹窗」")
+                stopSelf()
+            }
+            autoFold = foldLater
+            ui.postDelayed(foldLater, AUTO_FOLD_MS)
+        }
+
         view.setOnTouchListener(object : View.OnTouchListener {
             private var downX = 0f
             private var downY = 0f
@@ -121,7 +167,7 @@ class InspectorService : Service() {
             private var armed = false
 
             /**
-             * 按住半秒就「上膛」：球变琥珀色、文字变成「学」。
+             * 自检模式：按住半秒「上膛」，球变琥珀色、字变成「学」。
              *
              * 必须有这个视觉反馈。没有的话用户按住 0.3 秒松手，球什么都没做，
              * 他只会觉得「这个球坏了」；而长按和点击共用同一个球，
@@ -133,11 +179,18 @@ class InspectorService : Service() {
                 (view.background as? GradientDrawable)?.setColor(amber)
             }
 
+            /** 学弹窗模式：球本身就是「学」，长按只剩一个用途——收起来 */
+            private val fold = Runnable {
+                toast("已收起「学」球")
+                stopSelf()
+            }
+
             private fun reset() {
                 armed = false
                 ui.removeCallbacks(arm)
-                view.text = "检"
-                (view.background as? GradientDrawable)?.setColor(blue)
+                ui.removeCallbacks(fold)
+                view.text = baseText
+                (view.background as? GradientDrawable)?.setColor(base)
             }
 
             override fun onTouch(v: View, ev: MotionEvent): Boolean {
@@ -147,14 +200,19 @@ class InspectorService : Service() {
                         downY = ev.rawY
                         startX = lp.x
                         startY = lp.y
-                        ui.postDelayed(arm, 480L)
+                        // 用户已经在用了，自动收起的计时重新开始
+                        autoFold?.let { ui.removeCallbacks(it) }
+                        if (teach) ui.postDelayed(fold, 700L) else ui.postDelayed(arm, 480L)
                         return true
                     }
 
                     MotionEvent.ACTION_MOVE -> {
                         val moved = kotlin.math.abs(ev.rawX - downX) > 14 ||
                             kotlin.math.abs(ev.rawY - downY) > 14
-                        if (moved && !armed) ui.removeCallbacks(arm)
+                        if (moved && !armed) {
+                            ui.removeCallbacks(arm)
+                            ui.removeCallbacks(fold)
+                        }
                         lp.x = startX - (ev.rawX - downX).toInt()
                         lp.y = startY + (ev.rawY - downY).toInt()
                         runCatching { wm.updateViewLayout(v, lp) }
@@ -166,14 +224,17 @@ class InspectorService : Service() {
                             kotlin.math.abs(ev.rawY - downY) > 14
                         val learn = armed && !moved
                         reset()
+                        autoFold?.let { ui.postDelayed(it, AUTO_FOLD_MS) }
                         if (!moved) {
-                            if (learn) teach() else capture()
+                            // 学弹窗模式下点球就是要学；自检模式点球是看结果
+                            if (teach || learn) teach() else capture()
                         }
                         return true
                     }
 
                     MotionEvent.ACTION_CANCEL -> {
                         reset()
+                        autoFold?.let { ui.postDelayed(it, AUTO_FOLD_MS) }
                         return true
                     }
                 }
@@ -188,13 +249,16 @@ class InspectorService : Service() {
     }
 
     private fun removeBall() {
+        // 换模式时旧球上的自动收起必须一起撤掉，否则它会把新球关掉
+        autoFold?.let { ui.removeCallbacks(it) }
+        autoFold = null
         ball?.let { runCatching { wm.removeView(it) } }
         ball = null
     }
 
     // ------------------------------------------------------------------ 面板
 
-    /** 长按悬浮球：进入「学弹窗」，由无障碍服务负责抓树和盖遮罩 */
+    /** 点球（学弹窗模式）：进入「学弹窗」，由无障碍服务负责抓树和盖遮罩 */
     private fun teach() {
         val svc = SkipAccessibilityService.instance
         if (svc == null) {
