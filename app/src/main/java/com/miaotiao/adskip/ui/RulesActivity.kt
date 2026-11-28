@@ -12,6 +12,7 @@ import com.miaotiao.adskip.data.TaughtRulesStore
 import com.miaotiao.adskip.engine.RuleDocument
 import com.miaotiao.adskip.net.RemoteRules
 import com.miaotiao.adskip.service.SkipAccessibilityService
+import com.miaotiao.adskip.util.Feedback
 import org.json.JSONObject
 
 class RulesActivity : AppCompatActivity() {
@@ -23,6 +24,7 @@ class RulesActivity : AppCompatActivity() {
     private lateinit var tvLibMsg: TextView
     private lateinit var btnLibSync: MaterialButton
     private lateinit var btnTaughtClear: MaterialButton
+    private lateinit var btnTaughtSend: MaterialButton
 
     /** 手动同步进行中：按钮已经置灰，这里再兜一层，防止连点发出两串请求 */
     private var syncing = false
@@ -38,6 +40,7 @@ class RulesActivity : AppCompatActivity() {
         tvLibMsg = findViewById(R.id.tvLibMsg)
         btnLibSync = findViewById(R.id.btnLibSync)
         btnTaughtClear = findViewById(R.id.btnTaughtClear)
+        btnTaughtSend = findViewById(R.id.btnTaughtSend)
 
         etRules.setText(Prefs.customRules)
 
@@ -59,6 +62,7 @@ class RulesActivity : AppCompatActivity() {
 
         tvTaught.setOnClickListener { showTaught() }
         btnTaughtClear.setOnClickListener { confirmClearTaught() }
+        btnTaughtSend.setOnClickListener { sendAll() }
         refreshTaught()
         refreshLib()
     }
@@ -202,9 +206,12 @@ class RulesActivity : AppCompatActivity() {
         if (n == 0) {
             tvTaught.text = "还没学过弹窗规则。\n弹窗关不掉时：长按「检」悬浮球 → 点一下那个关闭按钮"
             btnTaughtClear.visibility = android.view.View.GONE
+            btnTaughtSend.visibility = android.view.View.GONE
         } else {
             tvTaught.text = "已学会 $n 条弹窗规则 · 查看 / 复制 / 删除"
             btnTaughtClear.visibility = android.view.View.VISIBLE
+            // 没人送回来，学到的规则就永远只在这一台手机上存在
+            btnTaughtSend.visibility = android.view.View.VISIBLE
         }
     }
 
@@ -243,15 +250,27 @@ class RulesActivity : AppCompatActivity() {
             .show()
     }
 
+    /** 「提交给开发者」：全选复制，再问一句要不要去问卷。 */
+    private fun sendAll() {
+        val rows = TaughtRulesStore.rows(Prefs.taughtRules)
+        if (rows.isEmpty()) {
+            tvHint.text = "还没有学过的规则"
+            return
+        }
+        copy(TaughtRulesStore.exportAll(Prefs.taughtRules), rows.size)
+    }
+
+    /**
+     * 复制之后就问「要不要去问卷」。
+     *
+     * 只弹一次 toast 的话，用户知道东西在剪贴板里，但不知道往哪贴——
+     * 问卷地址在他那儿是空的。问一句，跳不跳他自己定，App 不偷偷联网。
+     */
     private fun copy(text: String, n: Int) {
         val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE)
             as android.content.ClipboardManager
         cm.setPrimaryClip(android.content.ClipData.newPlainText("秒跳规则", text))
-        Toast.makeText(
-            this,
-            "已复制 $n 条，粘到问卷里就行",
-            Toast.LENGTH_SHORT
-        ).show()
+        Feedback.showRuleSurvey(this, n)
     }
 
     /** 学错了必须能撤：这条规则会真的去点别人 App 上的按钮 */

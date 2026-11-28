@@ -74,36 +74,55 @@
             app:cornerRadius="10dp" />
     </LinearLayout>
 
-    <!-- 现场学到的规则：单独一块，能看也能删 -->
+    <!-- 现场学到的规则：单独一块，能看、能复制、能删 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginBottom="12dp"
         android:background="@color/card"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingStart="12dp"
         android:paddingTop="4dp"
         android:paddingEnd="4dp"
         android:paddingBottom="4dp">
 
-        <TextView
-            android:id="@+id/tvTaught"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:lineSpacingExtra="2dp"
-            android:textColor="@color/text_secondary"
-            android:textSize="12sp"
-            tools:text="已学会 3 条弹窗规则（点这里看）" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
+            <TextView
+                android:id="@+id/tvTaught"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:lineSpacingExtra="2dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                tools:text="已学会 3 条弹窗规则 · 查看 / 复制 / 删除" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnTaughtClear"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:text="清空"
+                android:textSize="12sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- 学会的规则只在这台手机上生效，要有人送回开发者才能变成公共规则 -->
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnTaughtClear"
+            android:id="@+id/btnTaughtSend"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minWidth="0dp"
-            android:text="清空"
+            android:paddingStart="0dp"
+            android:paddingEnd="8dp"
+            android:text="@string/rule_survey_send"
             android:textSize="12sp"
             android:visibility="gone" />
     </LinearLayout>

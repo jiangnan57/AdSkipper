@@ -60,8 +60,8 @@ android {
         applicationId = "com.miaotiao.adskip"
         minSdk = 26
         targetSdk = 34
-        versionCode = 27
-        versionName = "1.9.1"
+        versionCode = 28
+        versionName = "1.9.2"
     }
 
     signingConfigs {

@@ -36,6 +36,15 @@ object Feedback {
      */
     const val QUESTIONNAIRE_URL = "https://wj.qq.com/s2/28866546/pssy/"
 
+    /**
+     * 「新规则入库」问卷：学到的弹窗规则通过它回流成公共规则。
+     *
+     * 和问题反馈分开两份：那边收的是运行日志（多半是「没生效」），
+     * 这边收的是 `包名 | when | action`（学会了一条别人还没有的）。
+     * 混在一起的话，两边都得先猜这份答卷是哪种。
+     */
+    const val RULE_SURVEY_URL = "https://wj.qq.com/s2/28867380/8kz9/"
+
     /** 问卷贴不下上万字，只带最近这些条 */
     private const val RECENT = 30
 
@@ -59,9 +68,25 @@ object Feedback {
             .setTitle(R.string.feedback_title)
             .setMessage(R.string.feedback_msg)
             .setPositiveButton(if (ready) R.string.feedback_go else R.string.feedback_ok) { _, _ ->
-                if (ready) open(activity)
+                if (ready) open(activity, QUESTIONNAIRE_URL)
             }
             .setNegativeButton(R.string.feedback_cancel, null)
+            .show()
+    }
+
+    /**
+     * 规则已经在剪贴板里了，这里只负责「说清楚下一步」。
+     *
+     * 不替用户自动跳：问卷是在浏览器/微信里打开的，直接跳走会让他以为 App 自己
+     * 把规则上传了——而实际上一个字节都没发，跳不跳全看他点不点。
+     */
+    fun showRuleSurvey(activity: Activity, count: Int) {
+        if (RULE_SURVEY_URL.isBlank()) return
+        AlertDialog.Builder(activity)
+            .setTitle(R.string.rule_survey_title)
+            .setMessage(activity.getString(R.string.rule_survey_msg, count))
+            .setPositiveButton(R.string.rule_survey_go) { _, _ -> open(activity, RULE_SURVEY_URL) }
+            .setNegativeButton(R.string.rule_survey_ok, null)
             .show()
     }
 
@@ -81,9 +106,9 @@ object Feedback {
         return ok
     }
 
-    private fun open(activity: Activity) {
+    private fun open(activity: Activity, url: String) {
         runCatching {
-            activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(QUESTIONNAIRE_URL)))
+            activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }.onFailure {
             toast(activity, R.string.feedback_no_browser)
         }

@@ -74,6 +74,11 @@
     <string name="feedback_copied">已复制到剪贴板</string>
     <string name="feedback_failed">生成运行记录失败</string>
     <string name="feedback_no_browser">没找到能打开网页的应用</string>
+    <string name="rule_survey_title">把规则提交给开发者</string>
+    <string name="rule_survey_msg">已复制 %1$d 条规则到剪贴板。\n\n下一步跳到「新规则入库」问卷，粘在第 1 题里就行。\n\n学到的规则只在这台手机上生效；提交后下个版本所有人都能直接用。</string>
+    <string name="rule_survey_go">去问卷粘贴</string>
+    <string name="rule_survey_ok">知道了</string>
+    <string name="rule_survey_send">提交给开发者</string>
 
     <!-- 首页状态卡 -->
     <string name="hero_today">今日已跳过</string>
