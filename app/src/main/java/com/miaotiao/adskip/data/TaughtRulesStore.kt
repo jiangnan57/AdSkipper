@@ -61,6 +61,25 @@ object TaughtRulesStore {
 
     fun appCount(raw: String): Int = rows(raw).map { it.pkg }.distinct().size
 
+    // ------------------------------------------------------------------ 导出发给人
+
+    /**
+     * 一行给人看的规则：`包名 | 应用名 | when | action`。
+     *
+     * 为什么不用存储那套制表符：微信、问卷的多行填空会把制表符吃掉或显示成
+     * 一团空白，粘过去就成了「com.x.x 淘宝 会员特惠 ×」谁也断不开。
+     * 竖线两边留空格，人和正则都认得出来。
+     *
+     * 文字里本身带竖线时换成全角，避免把一行切错字段。
+     */
+    fun exportLine(row: Row): String {
+        val app = row.name.ifBlank { row.pkg }
+        return listOf(row.pkg, app, row.whenText, row.actionText)
+            .joinToString(" | ") { it.replace('|', '｜') }
+    }
+
+    fun exportAll(raw: String): String = rows(raw).joinToString("\n") { exportLine(it) }
+
     // ------------------------------------------------------------------ 写
 
     /**

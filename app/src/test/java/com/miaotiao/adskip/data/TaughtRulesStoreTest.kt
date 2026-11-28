@@ -157,4 +157,29 @@ class TaughtRulesStoreTest {
         assertEquals(1, TaughtRulesStore.count(out))
         assertEquals("标题二", TaughtRulesStore.rows(out)[0].whenText)
     }
+
+    // ---------------------------------------------------------------- 导出发给人
+
+    @Test
+    fun `导出一行是竖线分隔的四段，粘贴后不会丢字段`() {
+        val doc = TaughtRulesStore.add("", "com.taobao.taobao", "淘宝", rule("会员特惠", "以后再逛"))!!
+        assertEquals(
+            "com.taobao.taobao | 淘宝 | 会员特惠 | 以后再逛",
+            TaughtRulesStore.exportAll(doc)
+        )
+    }
+
+    @Test
+    fun `文字里带竖线时换成全角，不把一行切成五段`() {
+        val doc = TaughtRulesStore.add("", "com.a", "应用", rule("A|B", "id/c"))!!
+        val line = TaughtRulesStore.exportAll(doc)
+        assertEquals("com.a | 应用 | A｜B | id/c", line)
+        assertEquals(4, line.split(" | ").size)
+    }
+
+    @Test
+    fun `应用名缺失时用包名顶上，不出现空字段`() {
+        val doc = TaughtRulesStore.add("", "com.b", "", rule("标题", "id/d"))!!
+        assertEquals("com.b | com.b | 标题 | id/d", TaughtRulesStore.exportAll(doc))
+    }
 }

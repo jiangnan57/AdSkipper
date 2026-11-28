@@ -203,7 +203,7 @@ class RulesActivity : AppCompatActivity() {
             tvTaught.text = "还没学过弹窗规则。\n弹窗关不掉时：长按「检」悬浮球 → 点一下那个关闭按钮"
             btnTaughtClear.visibility = android.view.View.GONE
         } else {
-            tvTaught.text = "已学会 $n 条弹窗规则 · 点这里查看或删除"
+            tvTaught.text = "已学会 $n 条弹窗规则 · 查看 / 复制 / 删除"
             btnTaughtClear.visibility = android.view.View.VISIBLE
         }
     }
@@ -220,10 +220,38 @@ class RulesActivity : AppCompatActivity() {
         }.toTypedArray()
 
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("已学会的弹窗规则（点一条可删除）")
-            .setItems(items) { _, i -> confirmDelete(rows[i]) }
+            .setTitle("已学会的弹窗规则")
+            .setItems(items) { _, i -> rowActions(rows[i]) }
+            .setNeutralButton("复制全部") { _, _ ->
+                copy(TaughtRulesStore.exportAll(Prefs.taughtRules), rows.size)
+            }
             .setPositiveButton("关闭", null)
             .show()
+    }
+
+    /**
+     * 点一条要能「复制」——学出来的东西发给我，才是把它补进公共库的唯一路径。
+     * 删除放在第二层，避免手一抖把刚学会的规则点没了。
+     */
+    private fun rowActions(target: TaughtRulesStore.Row) {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("「${target.whenText}」→ 点「${target.actionText}」")
+            .setMessage(TaughtRulesStore.exportLine(target))
+            .setPositiveButton("复制") { _, _ -> copy(TaughtRulesStore.exportLine(target), 1) }
+            .setNeutralButton("删除") { _, _ -> confirmDelete(target) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun copy(text: String, n: Int) {
+        val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+            as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("秒跳规则", text))
+        Toast.makeText(
+            this,
+            "已复制 $n 条，粘到问卷里就行",
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     /** 学错了必须能撤：这条规则会真的去点别人 App 上的按钮 */

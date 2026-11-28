@@ -68,6 +68,24 @@ python tools/build_rules.py --refresh
 "_disabled": ["-1835777899", "com.example.noisy"]
 ```
 
+## 把别人学会的规则收进来
+
+用户不用手写规则：在「规则管理 → 已学会」里点一条「复制」，拿到的是
+
+```
+com.taobao.taobao | 淘宝 | 会员特惠 | 以后再逛
+       包名        应用名   什么时候      点哪里
+```
+
+四段竖线分隔，直接对应 `apps[包名].popups[]` 的一项：
+
+```json
+"popups": [{ "when": ["会员特惠"], "action": ["以后再逛"] }]
+```
+
+粘进问卷、或者直接发过来，照着抄进 `overrides.json` 就行。
+`when` 必须是那个弹窗**独有的**文字（标题最合适）；`action` 是按钮上的原文。
+
 ## 地址
 
 ```
