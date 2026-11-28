@@ -129,13 +129,22 @@ com.xingin.xhs | 打开通知 | 以后再说              ← 三段也行
 
 ## 地址
 
+四路拉同一份文件，App 里按顺序试：
+
 ```
-https://cdn.jsdelivr.net/gh/jiangnan57/AdSkipper@main/rules_server/rules.json
+https://raw.githubusercontent.com/jiangnan57/AdSkipper/main/rules_server/rules.json   ← 不吃 CDN 缓存
+https://jiangnan57.github.io/AdSkipper/rules_server/rules.json                       ← Pages，部署即刷
+https://cdn.jsdelivr.net/gh/jiangnan57/AdSkipper@main/rules_server/rules.json         ← 国内最快，但会旧
+https://fastly.jsdelivr.net/gh/jiangnan57/AdSkipper@main/rules_server/rules.json
 ```
 
-jsDelivr 对 `@main` 有约 12 小时缓存，刚 push 完可能还是旧版。
-App 里另外配了 `fastly.jsdelivr`、GitHub Pages、`raw.githubusercontent` 三路兜底，
-手动「获取最新规则」时会带 `Cache-Control: no-cache`。
+- **自动同步**用 jsDelivr 打头（国内稳，晚几小时无所谓）
+- **手动「获取最新规则」**用 raw / Pages 打头（push 完立刻要看到）
+- jsDelivr 对 `@main` 的缓存约 12 小时，`purge.jsdelivr.net` 清了也没用——
+  它缓存的是「main 指向哪个 commit」，不是文件本身（实测三路节点清完仍返回旧版）。
+  所以要「立刻」只能走 raw 或 Pages。
+- raw 在国内时不时被 TLS reset（真机日志 `Connection reset`），所以 Pages 是必要的第二路。
+  Pages 对仓库根目录构建，**push 后约 1 分钟**生效。
 
 ## 注意
 
