@@ -1,7 +1,9 @@
 package com.miaotiao.adsample
 
 import android.content.Intent
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
@@ -88,6 +90,8 @@ class AdActivity : AppCompatActivity() {
             16 -> addExitTrap(root, w, h)
             99 -> setupContentControl(root, w, h)
             950 -> setupPopupOverlay(root, w, h)
+            951 -> setupPopupBareClose(root, w, h)
+            952 -> setupPopupLearnable(root, w, h)
             901 -> setupNovelPage(root, w, h)
             902 -> setupCommentSheet(root, w, h)
             903 -> setupChatPage(root, w, h)
@@ -418,6 +422,204 @@ class AdActivity : AppCompatActivity() {
             }
         }
         card.addView(btn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+
+        root.addView(card, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+            marginStart = dp(32)
+            marginEnd = dp(32)
+        })
+    }
+
+    /**
+     * 951：浮层弹窗，唯一能关掉它的只有一个自绘的 ×。
+     *
+     * 这是真实世界里最常见、也最让规则引擎没脾气的一种：关闭键是 close.png
+     * 或者 onDraw 里画的两条线，开发既没设 contentDescription，也没给资源 id。
+     * 无障碍树里它就是一个空壳 —— 没有 text、没有 desc、没有 viewId，
+     * 只剩 className 和 bounds。
+     *
+     * 靠「文案 / 控件 id」写规则的那套办法对它完全无效，
+     * 所以这个样本专门用来验证「几何 + 锚点」那一路能不能兜住。
+     */
+    private fun setupPopupBareClose(root: FrameLayout, w: Int, h: Int) {
+        val bg = root.getChildAt(0) as FrameLayout
+        bg.setOnClickListener(null)
+        bg.isClickable = false
+        bg.setBackgroundColor(Color.parseColor("#F2F3F5"))
+
+        val content = TextView(this).apply {
+            text = "内容条目 1\n内容条目 2\n内容条目 3"
+            setTextColor(Color.parseColor("#333333"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setPadding(dp(16), dp(40), dp(16), dp(16))
+        }
+        root.removeViewAt(0)
+        root.addView(content, FrameLayout.LayoutParams(w, h))
+
+        val mask = View(this).apply { setBackgroundColor(0x66000000.toInt()) }
+        root.addView(mask, FrameLayout.LayoutParams(w, h))
+
+        // 卡片外层用 FrameLayout，好把 × 叠在右上角
+        val holder = FrameLayout(this)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(Color.parseColor("#FFFFFF"))
+            }
+        }
+        card.addView(TextView(this).apply {
+            text = "会员特惠"
+            setTextColor(Color.parseColor("#111111"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+        })
+        card.addView(TextView(this).apply {
+            text = "开通会员解锁全部内容"
+            setTextColor(Color.parseColor("#888888"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(0, dp(8), 0, dp(16))
+        })
+        // 只有这一个「立刻开通」引导按钮，它不是关闭 —— 点它应该算失败
+        card.addView(TextView(this).apply {
+            text = "立刻开通"
+            setTextColor(Color.parseColor("#FFFFFF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            gravity = Gravity.CENTER
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(Color.parseColor("#FF6A00"))
+            }
+            setOnClickListener {
+                // 这里在 TextView.apply{} 里，tag 会解析成 View.getTag()，必须写全
+                Log.i(this@AdActivity.tag, "upsellClicked variant=$variantId  <- 点到了「立刻开通」")
+            }
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+        holder.addView(card, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+
+        // 自绘 ×：isClickable = true，但 text / contentDescription / id 全空
+        val glyph = GlyphCloseView(this)
+        glyph.setOnClickListener {
+            Log.i(tag, "popupClosed variant=$variantId")
+            this.skipped = true
+            startActivity(
+                Intent(this, ContentActivity::class.java)
+                    .putExtra("variant", variantId)
+                    .putExtra("how", "弹窗规则")
+            )
+            finish()
+        }
+        holder.addView(glyph, FrameLayout.LayoutParams(dp(40), dp(40)).apply {
+            gravity = Gravity.TOP or Gravity.END
+            topMargin = dp(4)
+            rightMargin = dp(4)
+        })
+
+        root.addView(holder, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+            marginStart = dp(32)
+            marginEnd = dp(32)
+        })
+    }
+
+    /** 只画两条交叉线的关闭图标：不设 text、不设 desc、不设资源 id */
+    private inner class GlyphCloseView(ctx: android.content.Context) : View(ctx) {
+        private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#9A9A9A")
+            strokeWidth = 5f
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val inset = width * 0.3f
+            canvas.drawLine(inset, inset, width - inset, height - inset, stroke)
+            canvas.drawLine(width - inset, inset, inset, height - inset, stroke)
+        }
+    }
+
+    /**
+     * 952：带文字的浮层弹窗，但内置规则里没有它。
+     *
+     * 和 950 长得几乎一样，只是文案换成了「限时秒杀 / 稍后再看」——
+     * 这两个字不会被任何现成规则命中，所以弹窗会一直停在那儿，
+     * 正好给「长按悬浮球 → 现场学一条」留出操作时间。
+     * 学完之后再进来，它应该被自己刚学的规则秒关。
+     */
+    private fun setupPopupLearnable(root: FrameLayout, w: Int, h: Int) {
+        val bg = root.getChildAt(0) as FrameLayout
+        bg.setOnClickListener(null)
+        bg.isClickable = false
+        bg.setBackgroundColor(Color.parseColor("#F2F3F5"))
+
+        val content = TextView(this).apply {
+            text = "内容条目 1\n内容条目 2\n内容条目 3"
+            setTextColor(Color.parseColor("#333333"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setPadding(dp(16), dp(40), dp(16), dp(16))
+        }
+        root.removeViewAt(0)
+        root.addView(content, FrameLayout.LayoutParams(w, h))
+
+        val mask = View(this).apply { setBackgroundColor(0x66000000.toInt()) }
+        root.addView(mask, FrameLayout.LayoutParams(w, h))
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(24), dp(24), dp(16))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(Color.parseColor("#FFFFFF"))
+            }
+        }
+        card.addView(TextView(this).apply {
+            text = "限时秒杀"
+            setTextColor(Color.parseColor("#111111"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+        })
+        card.addView(TextView(this).apply {
+            text = "仅剩 3 小时，错过再等一年"
+            setTextColor(Color.parseColor("#888888"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(0, dp(8), 0, dp(16))
+        })
+        card.addView(TextView(this).apply {
+            text = "稍后再看"
+            setTextColor(Color.parseColor("#FFFFFF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            gravity = Gravity.CENTER
+            isClickable = true
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(Color.parseColor("#E23A3A"))
+            }
+            setOnClickListener {
+                Log.i(this@AdActivity.tag, "popupClosed variant=$variantId")
+                this@AdActivity.skipped = true
+                startActivity(
+                    Intent(this@AdActivity, ContentActivity::class.java)
+                        .putExtra("variant", variantId)
+                        .putExtra("how", "弹窗规则")
+                )
+                finish()
+            }
+        }, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8) })

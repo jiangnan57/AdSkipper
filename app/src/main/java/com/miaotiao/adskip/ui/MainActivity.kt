@@ -29,6 +29,7 @@ import com.miaotiao.adskip.service.KeepAliveService
 import com.miaotiao.adskip.service.SkipAccessibilityService
 import com.miaotiao.adskip.util.AccessState
 import com.miaotiao.adskip.util.AccessUtil
+import com.miaotiao.adskip.util.Feedback
 import com.miaotiao.adskip.util.LogExport
 import com.miaotiao.adskip.util.SkipLog
 import java.text.SimpleDateFormat
@@ -148,6 +149,12 @@ class MainActivity : AppCompatActivity() {
                 LogExport.share(this@MainActivity)
                 true
             }
+        }
+
+        // 反馈：先把现场塞进剪贴板，再问一句要不要跳问卷。
+        // 「问一句」不能省——跳第三方网页是离开 App 的动作，得他自己点头。
+        findViewById<View>(R.id.rowFeedback).setOnClickListener {
+            Feedback.start(this@MainActivity)
         }
 
         // 副标题本身就是「保活问题」的入口：点一下按当前缺什么去补什么

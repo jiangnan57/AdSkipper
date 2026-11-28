@@ -32,6 +32,12 @@ object RuleRepository {
         }
         Prefs.learnedRules.takeIf { it.isNotBlank() }
             ?.let { applyLayer(ctx, it, "自动学习", builders, defaults) }
+        // 「学弹窗」教出来的排在手写规则之前：两者都算用户自己的，
+        // 但手写的更晚加载、覆盖关系更符合「我明确改过」的预期。
+        // 存的是逐行文本，这里才转成引擎认识的 JSON。
+        Prefs.taughtRules.takeIf { it.isNotBlank() }
+            ?.let { TaughtRulesStore.toJson(it) }
+            ?.let { applyLayer(ctx, it, "学弹窗", builders, defaults) }
         Prefs.customRules.takeIf { it.isNotBlank() }
             ?.let { applyLayer(ctx, it, "自定义", builders, defaults) }
 

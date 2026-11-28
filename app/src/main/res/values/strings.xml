@@ -55,6 +55,18 @@
     <string name="log_miss">没认出跳过按钮</string>
     <string name="log_system">系统提醒</string>
 
+    <!-- 问题反馈 -->
+    <string name="btn_feedback">问题反馈</string>
+    <string name="feedback_sub">自动带上运行记录，直接发给我</string>
+    <string name="feedback_title">问题反馈</string>
+    <string name="feedback_msg">已把运行记录复制到剪贴板：机型、系统、权限状态和最近 30 条记录，不含任何账号信息。\n\n下一步跳到腾讯问卷，在第 2 题里长按粘贴。</string>
+    <string name="feedback_go">同意，去粘贴</string>
+    <string name="feedback_ok">知道了</string>
+    <string name="feedback_cancel">取消</string>
+    <string name="feedback_copied">已复制到剪贴板</string>
+    <string name="feedback_failed">生成运行记录失败</string>
+    <string name="feedback_no_browser">没找到能打开网页的应用</string>
+
     <!-- 首页状态卡 -->
     <string name="hero_today">今日已跳过</string>
     <string name="hero_fix">去修复</string>

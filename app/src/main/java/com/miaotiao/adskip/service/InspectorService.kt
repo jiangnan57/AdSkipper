@@ -89,6 +89,8 @@ class InspectorService : Service() {
 
     private fun addBall() {
         val size = dp(46)
+        val blue = 0xE61E6FE0.toInt()
+        val amber = 0xE6D9822B.toInt()
         val view = TextView(this).apply {
             text = "检"
             setTextColor(Color.WHITE)
@@ -96,7 +98,7 @@ class InspectorService : Service() {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(0xE61E6FE0.toInt())
+                setColor(blue)
             }
         }
 
@@ -116,6 +118,27 @@ class InspectorService : Service() {
             private var downY = 0f
             private var startX = 0
             private var startY = 0
+            private var armed = false
+
+            /**
+             * 按住半秒就「上膛」：球变琥珀色、文字变成「学」。
+             *
+             * 必须有这个视觉反馈。没有的话用户按住 0.3 秒松手，球什么都没做，
+             * 他只会觉得「这个球坏了」；而长按和点击共用同一个球，
+             * 不区分的话又永远学不了弹窗。
+             */
+            private val arm = Runnable {
+                armed = true
+                view.text = "学"
+                (view.background as? GradientDrawable)?.setColor(amber)
+            }
+
+            private fun reset() {
+                armed = false
+                ui.removeCallbacks(arm)
+                view.text = "检"
+                (view.background as? GradientDrawable)?.setColor(blue)
+            }
 
             override fun onTouch(v: View, ev: MotionEvent): Boolean {
                 when (ev.action) {
@@ -124,10 +147,14 @@ class InspectorService : Service() {
                         downY = ev.rawY
                         startX = lp.x
                         startY = lp.y
+                        ui.postDelayed(arm, 480L)
                         return true
                     }
 
                     MotionEvent.ACTION_MOVE -> {
+                        val moved = kotlin.math.abs(ev.rawX - downX) > 14 ||
+                            kotlin.math.abs(ev.rawY - downY) > 14
+                        if (moved && !armed) ui.removeCallbacks(arm)
                         lp.x = startX - (ev.rawX - downX).toInt()
                         lp.y = startY + (ev.rawY - downY).toInt()
                         runCatching { wm.updateViewLayout(v, lp) }
@@ -137,7 +164,16 @@ class InspectorService : Service() {
                     MotionEvent.ACTION_UP -> {
                         val moved = kotlin.math.abs(ev.rawX - downX) > 14 ||
                             kotlin.math.abs(ev.rawY - downY) > 14
-                        if (!moved) capture()
+                        val learn = armed && !moved
+                        reset()
+                        if (!moved) {
+                            if (learn) teach() else capture()
+                        }
+                        return true
+                    }
+
+                    MotionEvent.ACTION_CANCEL -> {
+                        reset()
                         return true
                     }
                 }
@@ -157,6 +193,17 @@ class InspectorService : Service() {
     }
 
     // ------------------------------------------------------------------ 面板
+
+    /** 长按悬浮球：进入「学弹窗」，由无障碍服务负责抓树和盖遮罩 */
+    private fun teach() {
+        val svc = SkipAccessibilityService.instance
+        if (svc == null) {
+            toast("请先开启无障碍服务")
+            return
+        }
+        removePanel()
+        svc.beginTeach()
+    }
 
     private fun capture() {
         val svc = SkipAccessibilityService.instance

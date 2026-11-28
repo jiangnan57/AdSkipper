@@ -219,6 +219,17 @@ object Prefs {
         get() = sp?.getString("learned_rules", "") ?: ""
         set(value) = setString("learned_rules", value)
 
+    /**
+     * 「学弹窗」教出来的规则（用户在弹窗上亲手点出来的）。
+     *
+     * 单独一层，不并进 customRules：那份是用户手写的整段 JSON，
+     * 可能是对象格式也可能是李跳跳数组，往里合并容易写坏人家自己的东西。
+     * 独立一层还能在设置里一键清空，不影响手写规则。
+     */
+    var taughtRules: String
+        get() = sp?.getString("taught_rules", "") ?: ""
+        set(value) = setString("taught_rules", value)
+
     /** 额外需要拦截的包名，换行 / 逗号 / 空格分隔 */
     var guardBlocklist: String
         get() = sp?.getString("guard_blocklist", "") ?: ""

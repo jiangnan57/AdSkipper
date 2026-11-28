@@ -23,10 +23,12 @@ import com.miaotiao.adskip.data.AppLists
 import com.miaotiao.adskip.data.LearnStore
 import com.miaotiao.adskip.data.Prefs
 import com.miaotiao.adskip.data.RuleRepository
+import com.miaotiao.adskip.data.TaughtRulesStore
 import com.miaotiao.adskip.engine.Access
 import com.miaotiao.adskip.engine.AppRule
 import com.miaotiao.adskip.engine.InputTrace
 import com.miaotiao.adskip.engine.Matcher
+import com.miaotiao.adskip.engine.PopupTeacher
 import com.miaotiao.adskip.engine.RuleSet
 import com.miaotiao.adskip.engine.ShakeDetector
 import com.miaotiao.adskip.engine.SplashRule
@@ -733,6 +735,7 @@ class SkipAccessibilityService : AccessibilityService() {
         watchToken++
         watching = false
         hideGhostWindow()
+        hideTeachOverlay()
         main.removeCallbacks(poller)
         main.removeCallbacksAndMessages(null)
         runCatching { scanThread?.quitSafely() }
@@ -1683,6 +1686,240 @@ class SkipAccessibilityService : AccessibilityService() {
             clickedAt.entries.removeAll { now - it.value > 60_000L }
         }
         clickedAt[key] = SystemClock.uptimeMillis()
+    }
+
+    // ------------------------------------------------------------------ 学弹窗
+
+    private var teachOverlay: View? = null
+    private var teachTimeout: Runnable? = null
+    private var teachCands: List<PopupTeacher.Cand> = emptyList()
+    private var teachScreenArea = 0L
+    private var teachPkg = ""
+    private var teachAppName = ""
+
+    /**
+     * 进入「学弹窗」：先把当前界面压成候选列表，再盖一层遮罩让用户指出目标。
+     *
+     * 顺序不能反。如果先盖遮罩再抓树，用户可能在树还没读完时就点了，
+     * 那一击会被白白吃掉，看起来就是「按了没反应」。
+     *
+     * 抓树必须在 scanHandler 上做：读窗口是同步 IPC，放主线程会和系统的
+     * 事件派发互相等，几秒钟就能把整个手机卡住（见 poller 的注释）。
+     * 放上去之后主线程只负责最后弹遮罩，中间那 100~300ms 用户是无感的。
+     */
+    fun beginTeach() {
+        if (teachOverlay != null) {
+            hideTeachOverlay()
+            return
+        }
+        val h = scanHandler
+        if (h == null) {
+            toast("服务刚启动，等一秒再试")
+            return
+        }
+        h.post {
+            val root = runCatching { rootInActiveWindow }.getOrNull()
+            if (root == null) {
+                main.post { toast("取不到当前界面") }
+                return@post
+            }
+            val tree = Access.walk(root, Access.MAX_NODES)
+            try {
+                val pkg = runCatching { tree.firstOrNull()?.packageName?.toString() }
+                    .getOrNull().orEmpty()
+                val dm = resources.displayMetrics
+                val area = dm.widthPixels.toLong() * dm.heightPixels
+                val cands = PopupTeacher.collect(tree, area)
+                val appName = appLabel(pkg)
+                main.post {
+                    if (pkg.isBlank() || pkg == packageName) {
+                        toast("在秒跳自己里面学不了，切到那个 App 再试")
+                        return@post
+                    }
+                    if (cands.isEmpty()) {
+                        toast("这个界面上没有读得出文字的按钮")
+                        return@post
+                    }
+                    teachCands = cands
+                    teachScreenArea = area
+                    teachPkg = pkg
+                    teachAppName = appName
+                    showTeachOverlay()
+                }
+            } finally {
+                // Cand 是抽出来的纯数据，节点在这里释放掉不影响后续判定
+                Access.recycleAll(tree)
+            }
+        }
+    }
+
+    /**
+     * 学习遮罩：一层几乎透明的全屏视图，专门用来截获「用户指的是哪一个按钮」。
+     *
+     * 为什么不让用户从列表里挑：弹窗上往往有五六个可点节点（卡片、标题、
+     * 两个按钮、遮罩），文字列表既长又难分辨；让他在原地戳一下那个按钮，
+     * 是唯一不会选错的交互。
+     */
+    private fun showTeachOverlay() {
+        hideTeachOverlay()
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            toast("需要悬浮窗权限，去首页把「悬浮窗」打开")
+            return
+        }
+        val dm = resources.displayMetrics
+        val root = android.widget.FrameLayout(this)
+
+        val catcher = View(this).apply {
+            setBackgroundColor(0x2E000000)
+            isClickable = true
+            setOnTouchListener { _, ev ->
+                if (ev.action == android.view.MotionEvent.ACTION_UP) {
+                    onTeachTap(ev.rawX.toInt(), ev.rawY.toInt())
+                }
+                true
+            }
+        }
+        root.addView(catcher, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        val tip = android.widget.TextView(this).apply {
+            text = "点一下你要关掉的那个按钮"
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(22).toFloat()
+                setColor(0xE6000000.toInt())
+            }
+        }
+        root.addView(tip, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            topMargin = dm.heightPixels / 6
+        })
+
+        val cancel = android.widget.TextView(this).apply {
+            text = "取消"
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(dp(22), dp(10), dp(22), dp(10))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(0xCC333333.toInt())
+            }
+            setOnClickListener { hideTeachOverlay() }
+        }
+        root.addView(cancel, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(48)
+        })
+
+        val lp = WindowManager.LayoutParams(
+            dm.widthPixels,
+            dm.heightPixels,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+        }
+
+        runCatching {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            wm.addView(root, lp)
+            teachOverlay = root
+            SkipLog.add("学弹窗：等你指按钮")
+
+            // 15 秒自动收。遮罩是全屏可点的，一旦用户忘了点「取消」就去干别的，
+            // 整个屏幕会变成一块砖——他连回桌面都得先猜出这层是干什么的。
+            // 真机上就是这么把自己锁在外面的，所以这条兜底不能省。
+            val t = Runnable { hideTeachOverlay() }
+            teachTimeout = t
+            main.postDelayed(t, 15_000L)
+        }.onFailure {
+            Log.w(TAG, "teach overlay failed", it)
+            teachOverlay = null
+            toast("遮罩没加上：${it.message}")
+        }
+    }
+
+    private fun hideTeachOverlay() {
+        teachTimeout?.let { main.removeCallbacks(it) }
+        teachTimeout = null
+        teachOverlay?.let { v ->
+            runCatching {
+                (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v)
+            }
+        }
+        teachOverlay = null
+    }
+
+    /** 用户戳了遮罩：把坐标还原成节点，再拼成一条 popups 规则 */
+    private fun onTeachTap(x: Int, y: Int) {
+        val target = PopupTeacher.pickAt(teachCands, x, y, teachScreenArea)
+        if (target == null) {
+            toast("这里没有可学的按钮，往按钮上点准一点")
+            return
+        }
+        val anchor = PopupTeacher.anchorFor(teachCands, target)
+        if (anchor == null) {
+            hideTeachOverlay()
+            toast("这个弹窗上读不出能当条件的字，暂时学不了")
+            return
+        }
+        val rule = PopupTeacher.buildRule(target, anchor)
+        if (rule == null) {
+            hideTeachOverlay()
+            toast("这个按钮读不出文字，暂时学不了")
+            return
+        }
+        val merged = TaughtRulesStore.add(Prefs.taughtRules, teachPkg, teachAppName, rule)
+        hideTeachOverlay()
+        if (merged == null) {
+            toast("这条规则已经学过了")
+            return
+        }
+        Prefs.taughtRules = merged
+        reloadRules()
+        val app = teachAppName.ifBlank { teachPkg }
+        SkipLog.add("学会弹窗 · $app · 点 ${target.label()}")
+        toast("已学会：出现「$anchor」时点 ${target.label()}")
+    }
+
+
+    /**
+     * 学弹窗时回显用的应用名。
+     *
+     * 先用规则里的 name（内置库和远程库都写了中文名），没有再问系统要。
+     * 绝不能直接把包名甩给用户——「com.tencent.mm」没人认得出是微信，
+     * 而学完之后弹窗提示里就要显示这个名字。
+     */
+    private fun appLabel(pkg: String): String {
+        rules?.apps?.get(pkg)?.name?.takeIf { it.isNotBlank() }?.let { return it }
+        return runCatching {
+            val pm = packageManager
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        }.getOrDefault("").take(24)
+    }
+
+    /** 无障碍服务这边没有 Activity，Toast 只能直接挂到系统窗口上 */
+    private fun toast(msg: String) {        runCatching {
+            Handler(Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     // ------------------------------------------------------------------ 自检 / 探测器
