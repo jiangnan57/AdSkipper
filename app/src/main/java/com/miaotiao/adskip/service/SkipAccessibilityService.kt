@@ -467,6 +467,16 @@ class SkipAccessibilityService : AccessibilityService() {
     private var ghost: View? = null
 
     /**
+     * 微窗有没有挂上，供诊断导出使用。
+     *
+     * 这个值比「悬浮窗权限有没有给」更接近真相：权限给了但 addView 失败
+     * （ROM 拦截、窗口 token 失效），`canDrawOverlays` 仍然返回 true，
+     * 而进程拿不到前台窗口数据，照样一个广告都不跳。
+     */
+    val ghostAlive: Boolean
+        get() = ghost != null
+
+    /**
      * 1×1 的透明悬浮窗。
      *
      * 目的不是显示，而是让本进程「有可见窗口」。

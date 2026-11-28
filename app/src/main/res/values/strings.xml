@@ -45,7 +45,7 @@
 
     <!-- 运行记录页 -->
     <string name="title_log">运行记录</string>
-    <string name="btn_export">导出</string>
+    <string name="btn_export">导出诊断</string>
     <string name="log_empty">还没有记录</string>
     <string name="log_today">今天</string>
     <string name="log_yesterday">昨天</string>
@@ -62,4 +62,6 @@
     <string name="hero_need_step">还需要 1 步</string>
     <string name="hero_ok_sub">后台保护正常</string>
     <string name="hero_off">广告不会被跳过</string>
+    <string name="hero_not_connected">授权还在，服务没连上</string>
+    <string name="hero_not_connected_sub">去系统设置关掉再打开一次</string>
 </resources>

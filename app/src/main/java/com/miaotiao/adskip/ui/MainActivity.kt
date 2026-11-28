@@ -27,6 +27,7 @@ import com.miaotiao.adskip.service.InspectorService
 import com.miaotiao.adskip.service.JumpGuard
 import com.miaotiao.adskip.service.KeepAliveService
 import com.miaotiao.adskip.service.SkipAccessibilityService
+import com.miaotiao.adskip.util.AccessState
 import com.miaotiao.adskip.util.AccessUtil
 import com.miaotiao.adskip.util.LogExport
 import com.miaotiao.adskip.util.SkipLog
@@ -119,7 +120,8 @@ class MainActivity : AppCompatActivity() {
         bindSwitches()
 
         btnFix.setOnClickListener {
-            if (!AccessUtil.isServiceEnabled(this)) openAccessibilitySettings()
+            // 没真连上（含假开）就只能去系统设置，页内修不了
+            if (AccessUtil.state(this) != AccessState.CONNECTED) openAccessibilitySettings()
             else fixFirstIssue()
         }
 
@@ -292,8 +294,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onSubStatusClick() {
-        val on = AccessUtil.isServiceEnabled(this)
-        if (!on) {
+        // 假开也算「没连上」：这时候补权限没用，必须回去重开一次服务
+        if (AccessUtil.state(this) != AccessState.CONNECTED) {
             openAccessibilitySettings()
             return
         }
@@ -403,11 +405,16 @@ class MainActivity : AppCompatActivity() {
     // ------------------------------------------------------------------ 状态渲染
 
     private fun refreshStatus() {
-        val on = AccessUtil.isServiceEnabled(this)
-        // 服务活着就把「丢失」标记清掉；被撤销时保留标记，给出明确原因
-        if (on) Prefs.clearServiceLost()
+        // 「授权还在」和「真的连上了」不是一回事（见 AccessUtil.state 的注释）。
+        // 小米上最常见的故障就是 Settings 里名字还在、进程早被杀掉；
+        // 以前这种情况首页照样显示绿色的「服务运行中」，用户截图发过来，
+        // 开发者和用户谁看都以为没问题。
+        val access = AccessUtil.state(this)
+        val connected = access == AccessState.CONNECTED
+        // 只有真连上才清「丢失」标记：中间态是假开，标记要留着
+        if (connected) Prefs.clearServiceLost()
 
-        val lost = !on && Prefs.serviceLost
+        val lost = access == AccessState.OFF && Prefs.serviceLost
         val master = Prefs.masterEnabled
 
         // 浏览器「无障碍开着但什么都不跳」的真正原因往往不是无障碍本身，
@@ -415,12 +422,12 @@ class MainActivity : AppCompatActivity() {
         val notifyOk = notifyGranted()
         val overlayOk = AccessUtil.canDrawOverlay(this)
         val batteryOk = batteryWhitelisted()
-        val healthy = on && notifyOk && overlayOk && batteryOk
 
         // 文案优先级：总开关 > 无障碍 > 三项后台权限 > 正常。
         // 一次只让用户处理一件事，别把四个问题一起糊在脸上。
-        var state = getString(R.string.hero_need_step)
-        var sub = ""
+        // when 有 else 分支，两者必然被赋值，不需要默认值
+        val state: String
+        val sub: String
         var style = STYLE_WARN
         var fixText = getString(R.string.hero_fix)
         var needFix = true
@@ -433,14 +440,24 @@ class MainActivity : AppCompatActivity() {
                 needFix = false
             }
 
-            !on && lost -> {
+            access == AccessState.AUTHORIZED_NOT_CONNECTED -> {
+                // 假开：系统面板上还是「已开启」，但服务进程已经没了。
+                // 这一句必须说人话，否则用户会去系统里看一眼「明明是开的」
+                // 然后认定是我们坏了。
+                state = getString(R.string.hero_not_connected)
+                sub = getString(R.string.hero_not_connected_sub)
+                style = STYLE_WARN
+                fixText = getString(R.string.hero_reopen)
+            }
+
+            access == AccessState.OFF && lost -> {
                 state = "无障碍被系统关闭"
                 sub = "常见原因是清理了后台"
                 style = STYLE_WARN
                 fixText = getString(R.string.hero_reopen)
             }
 
-            !on -> {
+            access == AccessState.OFF -> {
                 state = "无障碍没有开启"
                 sub = "需要在系统设置里授权一次"
                 style = STYLE_OFF
@@ -499,7 +516,7 @@ class MainActivity : AppCompatActivity() {
         btnFix.setBackgroundTintList(
             ContextCompat.getColorStateList(
                 this,
-                if (!on) R.color.brand else R.color.warn
+                if (!connected) R.color.brand else R.color.warn
             )
         )
 
@@ -570,7 +587,7 @@ class MainActivity : AppCompatActivity() {
             toast("已关闭")
             return
         }
-        if (!AccessUtil.isServiceEnabled(this)) {
+        if (AccessUtil.state(this) != AccessState.CONNECTED) {
             toast("请先开启无障碍服务")
             return
         }
