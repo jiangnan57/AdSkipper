@@ -139,7 +139,7 @@ object RemoteRules {
                 Prefs.remoteEtag = download.etag.orEmpty()
                 Prefs.remoteEtagUrl = if (download.etag.isNullOrBlank()) "" else candidate
 
-                val msg = describe("同步成功", ctx, RuleDocument.stats(body))
+                val msg = describe("已获取", ctx, RuleDocument.stats(body))
                 finish(true, msg)
                 Log.i(TAG, "remote rules synced: ${stats.records} records, ${body.length} chars, $host")
                 return Result(true, msg, stats.records, stats.splashApps, stats.popupApps, host)
@@ -234,10 +234,15 @@ object RemoteRules {
         }
     }
 
+    /**
+     * 一句话说清结果。开屏/弹窗的明细只写进日志，不进这句话：
+     * 卡片上就一行字的位置，带上「（开屏 20 / 弹窗 2）」必换行，
+     * 换行之后那个孤零零的「）」比没有这条信息更难看。
+     */
     private fun describe(prefix: String, ctx: Context, stats: RuleDocument.Stats): String {
         val ver = cachedMeta(ctx)?.version ?: 0
-        val v = if (ver > 0) "v$ver · " else ""
-        return "$prefix：$v${stats.records} 条（开屏 ${stats.splashApps} / 弹窗 ${stats.popupApps}）"
+        val v = if (ver > 0) " v$ver" else ""
+        return "$prefix$v · ${stats.records} 条"
     }
 
     private fun friendlyError(e: Exception): String = when (e) {

@@ -89,6 +89,9 @@ class RulesActivity : AppCompatActivity() {
      * 用户点这个按钮的前提就是「我刚改了库，现在要看到」，
      * 拿一句「已是最新」把他挡回去，比同步失败还让人恼火。
      */
+    private fun primaryHost(): String =
+        runCatching { java.net.URL(Prefs.DEFAULT_REMOTE_URL).host }.getOrDefault("")
+
     private fun manualSync() {
         if (syncing) return
         val url = Prefs.remoteUrl
@@ -117,8 +120,12 @@ class RulesActivity : AppCompatActivity() {
                     SkipAccessibilityService.instance?.reloadRules()
                     val after = RemoteRules.cachedMeta(this)?.version ?: 0
                     val upgrade = if (before > 0 && after > before) "（v$before → v$after）" else ""
-                    tvLibMsg.text = r.message + upgrade
-                    tvHint.text = if (r.host.isNotBlank()) "来源：${r.host}" else ""
+                    // 走了备用线路才需要说：默认那条线不通，用户有权知道
+                    val alt = if (r.host.isNotBlank() && r.host != primaryHost()) {
+                        "\n走备用线路 ${r.host}"
+                    } else ""
+                    tvLibMsg.text = r.message + upgrade + alt
+                    tvHint.text = ""
                     Toast.makeText(this, "规则库已更新", Toast.LENGTH_SHORT).show()
                 } else {
                     tvLibMsg.text = r.message
