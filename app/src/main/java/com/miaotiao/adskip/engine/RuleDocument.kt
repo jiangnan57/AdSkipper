@@ -35,27 +35,42 @@ object RuleDocument {
                     if (hasSplash(app)) splash++
                     if (hasPopups(app)) popup++
                 }
-                if (apps.length() == 0) throw IllegalArgumentException("apps 是空对象")
-                return Stats(apps.length(), splash, popup)
+                // 自己的库里还夹着一层「上游快照」（legacy），按李跳跳哈希数组存的。
+                // 不算进去的话，界面上会显示「共 19 条」，用户以为库缩水了。
+                val legacy = countArray(doc.optJSONArray("legacy"))
+                if (apps.length() == 0 && legacy.records == 0) {
+                    throw IllegalArgumentException("apps 是空对象")
+                }
+                return Stats(
+                    apps.length() + legacy.records,
+                    splash + legacy.splashApps,
+                    popup + legacy.popupApps
+                )
             }
             is JSONArray -> {
-                var valid = 0
-                var splash = 0
-                var popup = 0
-                for (i in 0 until doc.length()) {
-                    val entry = doc.optJSONObject(i) ?: continue
-                    for (key in entry.keys()) {
-                        val app = objectValue(entry.opt(key)) ?: continue
-                        valid++
-                        if (hasSplash(app)) splash++
-                        if (hasPopups(app)) popup++
-                    }
-                }
-                if (valid == 0) throw IllegalArgumentException("数组里没有可识别的应用规则")
-                return Stats(valid, splash, popup)
+                val s = countArray(doc)
+                if (s.records == 0) throw IllegalArgumentException("数组里没有可识别的应用规则")
+                return s
             }
             else -> throw IllegalArgumentException("不支持的规则格式")
         }
+    }
+
+    private fun countArray(doc: JSONArray?): Stats {
+        if (doc == null) return Stats(0, 0, 0)
+        var valid = 0
+        var splash = 0
+        var popup = 0
+        for (i in 0 until doc.length()) {
+            val entry = doc.optJSONObject(i) ?: continue
+            for (key in entry.keys()) {
+                val app = objectValue(entry.opt(key)) ?: continue
+                valid++
+                if (hasSplash(app)) splash++
+                if (hasPopups(app)) popup++
+            }
+        }
+        return Stats(valid, splash, popup)
     }
 
     private fun hasSplash(app: JSONObject): Boolean {

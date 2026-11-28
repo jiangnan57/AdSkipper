@@ -72,7 +72,12 @@ object RuleRepository {
         }
 
         when (doc) {
-            is JSONObject -> applyObject(doc, origin, builders, defaults)
+            is JSONObject -> {
+                // 自己的库里夹着一层上游快照（legacy，李跳跳哈希数组）。
+                // 先放它、后放 apps：同一个包两边都有时，自己写的那条覆盖社区那条。
+                doc.optJSONArray("legacy")?.let { applyHashArray(ctx, it, origin, builders, defaults) }
+                applyObject(doc, origin, builders, defaults)
+            }
             is JSONArray -> applyHashArray(ctx, doc, origin, builders, defaults)
         }
     }

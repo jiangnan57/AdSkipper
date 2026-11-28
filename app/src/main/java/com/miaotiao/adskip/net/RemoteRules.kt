@@ -23,11 +23,21 @@ object RemoteRules {
     private const val MAX_BYTES = 4 * 1024 * 1024
     private const val MAX_RECORDS = 5000
 
-    private val COMMUNITY_MIRRORS = listOf(
+    /** 一次同步（含换镜像重试）的总预算。4 个镜像各 8 秒会拖到半分钟，用户只会以为卡死 */
+    private const val TOTAL_BUDGET_MS = 30_000L
+
+    /**
+     * 同一个文件的多路镜像，内容完全一样，只换传输通道。
+     *
+     * jsDelivr 在国内比 raw.githubusercontent 稳得多，所以排在前面；
+     * 但 jsDelivr 对 `@main` 有大约 12 小时缓存，刚 push 完可能还是旧版——
+     * 想立刻拿到新版，raw 和 GitHub Pages 这两路是绕过 CDN 缓存的。
+     */
+    private val LIB_MIRRORS = listOf(
         Prefs.DEFAULT_REMOTE_URL,
-        "https://cdn.jsdelivr.net/gh/Snoopy1866/LiTiaotiao-Custom-Rules@main/BasicRules.json",
-        "https://fastly.jsdelivr.net/gh/Snoopy1866/LiTiaotiao-Custom-Rules@main/BasicRules.json",
-        "https://raw.githubusercontent.com/Snoopy1866/LiTiaotiao-Custom-Rules/main/BasicRules.json"
+        "https://fastly.jsdelivr.net/gh/jiangnan57/AdSkipper@main/rules_server/rules.json",
+        "https://jiangnan57.github.io/AdSkipper/rules_server/rules.json",
+        "https://raw.githubusercontent.com/jiangnan57/AdSkipper/main/rules_server/rules.json"
     )
 
     data class Result(
@@ -35,8 +45,13 @@ object RemoteRules {
         val message: String,
         val apps: Int = 0,
         val splashApps: Int = 0,
-        val popupApps: Int = 0
+        val popupApps: Int = 0,
+        /** 实际拿到数据的镜像域名，用于在界面上说清楚「从哪来的」 */
+        val host: String = ""
     )
+
+    /** 缓存里那份规则的元信息：版本、更新日期、条数 */
+    data class Meta(val version: Int, val updatedAt: String, val records: Int)
 
     private data class Download(
         val body: String?,
@@ -59,6 +74,23 @@ object RemoteRules {
 
     fun cachedApps(ctx: Context): Int = cachedStats(ctx)?.records ?: 0
 
+    fun cachedMeta(ctx: Context): Meta? {
+        val raw = cachedJson(ctx) ?: return null
+        val stats = runCatching { RuleDocument.stats(raw) }.getOrNull() ?: return null
+        return runCatching {
+            val doc = RuleDocument.parse(raw)
+            if (doc is org.json.JSONObject) {
+                Meta(
+                    version = doc.optInt("version", 0),
+                    updatedAt = doc.optString("updatedAt", ""),
+                    records = stats.records
+                )
+            } else {
+                Meta(0, "", stats.records)
+            }
+        }.getOrNull()
+    }
+
     /**
      * 远程规则是「可执行的界面指令」——关键词、点击动作、是否按返回，
      * 全都会直接作用在别人的 App 上。明文 http 传输意味着同一个 WiFi 下
@@ -77,16 +109,22 @@ object RemoteRules {
             return Result(false, "规则地址必须以 https:// 开头（明文 http 可被中途篡改为任意点击指令）")
         }
 
+        val deadline = System.currentTimeMillis() + TOTAL_BUDGET_MS
         var lastError = "未知错误"
         for (candidate in candidates) {
+            if (System.currentTimeMillis() > deadline) {
+                lastError = "网络太慢，先停在这里"
+                break
+            }
             try {
                 val download = download(candidate, force)
+                val host = runCatching { URL(candidate).host }.getOrDefault("")
                 if (download.notModified) {
                     val stats = cachedStats(ctx)
                     if (stats != null) {
-                        val msg = describe("已是最新", stats)
+                        val msg = describe("已是最新", ctx, stats)
                         finish(true, msg)
-                        return Result(true, msg, stats.records, stats.splashApps, stats.popupApps)
+                        return Result(true, msg, stats.records, stats.splashApps, stats.popupApps, host)
                     }
                     throw IllegalStateException("服务端返回 304，但本地缓存不可用")
                 }
@@ -101,10 +139,10 @@ object RemoteRules {
                 Prefs.remoteEtag = download.etag.orEmpty()
                 Prefs.remoteEtagUrl = if (download.etag.isNullOrBlank()) "" else candidate
 
-                val msg = describe("同步成功", stats)
+                val msg = describe("同步成功", ctx, RuleDocument.stats(body))
                 finish(true, msg)
-                Log.i(TAG, "remote rules synced: ${stats.records} records, ${body.length} chars")
-                return Result(true, msg, stats.records, stats.splashApps, stats.popupApps)
+                Log.i(TAG, "remote rules synced: ${stats.records} records, ${body.length} chars, $host")
+                return Result(true, msg, stats.records, stats.splashApps, stats.popupApps, host)
             } catch (e: Exception) {
                 lastError = friendlyError(e)
                 Log.i(TAG, "remote mirror failed: ${candidate.substringBefore('?')} -> $lastError")
@@ -120,8 +158,9 @@ object RemoteRules {
     private fun candidates(raw: String): List<String> {
         val entered = raw.split('\n', ';').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (entered.isEmpty()) return emptyList()
+        // 只有「用默认库」才展开镜像；用户自己填了地址就按他填的走
         return if (entered.size == 1 && entered[0] == Prefs.DEFAULT_REMOTE_URL) {
-            COMMUNITY_MIRRORS
+            LIB_MIRRORS
         } else entered
     }
 
@@ -129,12 +168,17 @@ object RemoteRules {
         var conn: HttpURLConnection? = null
         try {
             conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 8000
+                connectTimeout = 6000
                 readTimeout = 10_000
                 instanceFollowRedirects = true
                 requestMethod = "GET"
                 setRequestProperty("Accept", "application/json,text/plain,*/*")
                 setRequestProperty("User-Agent", "MiaoTiao/${BuildConfig.VERSION_NAME}")
+                if (force) {
+                    // 手动点「获取最新规则」时不能让中间层拿旧副本糊弄过去
+                    setRequestProperty("Cache-Control", "no-cache")
+                    setRequestProperty("Pragma", "no-cache")
+                }
                 if (!force && Prefs.remoteEtagUrl == url && Prefs.remoteEtag.isNotBlank()) {
                     setRequestProperty("If-None-Match", Prefs.remoteEtag)
                 }
@@ -190,8 +234,11 @@ object RemoteRules {
         }
     }
 
-    private fun describe(prefix: String, stats: RuleDocument.Stats): String =
-        "$prefix：${stats.records} 条（开屏 ${stats.splashApps} / 弹窗 ${stats.popupApps}）"
+    private fun describe(prefix: String, ctx: Context, stats: RuleDocument.Stats): String {
+        val ver = cachedMeta(ctx)?.version ?: 0
+        val v = if (ver > 0) "v$ver · " else ""
+        return "$prefix：$v${stats.records} 条（开屏 ${stats.splashApps} / 弹窗 ${stats.popupApps}）"
+    }
 
     private fun friendlyError(e: Exception): String = when (e) {
         is UnknownHostException -> "域名解析失败，请检查网络"

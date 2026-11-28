@@ -12,8 +12,27 @@ import java.util.Locale
 object Prefs {
 
     private const val FILE = "adskip_prefs"
-    const val DEFAULT_REMOTE_URL =
+
+    /**
+     * 自己的规则库。
+     *
+     * 以前默认指向社区 BasicRules.json——规则怎么写、什么时候改、改坏了怎么回滚，
+     * 全在别人手里；而且那份是李跳跳哈希数组，连包名都读不出来，出了问题无从查起。
+     * 现在默认指向本仓库的 rules_server/rules.json：内容是我们自己合成、自己发版的，
+     * 版本号、更新日期都写文件里，App 能告诉自己「现在是第几版、多少条」。
+     *
+     * 仓库里 tools/build_rules.py 负责把「社区快照 + 自己的修正」合成这份文件，
+     * 改完 push，用户在「规则管理 → 获取最新规则」里就能拿到。
+     */
+    const val RULE_LIB_URL =
+        "https://cdn.jsdelivr.net/gh/jiangnan57/AdSkipper@main/rules_server/rules.json"
+
+    /** 历史默认值：老版本装过的用户 prefs 里存的是这个，升级时要迁到自己的库 */
+    private const val LEGACY_COMMUNITY_URL =
         "https://testingcf.jsdelivr.net/gh/Snoopy1866/LiTiaotiao-Custom-Rules@main/BasicRules.json"
+
+    const val DEFAULT_REMOTE_URL = RULE_LIB_URL
+
     private var sp: SharedPreferences? = null
 
     fun init(ctx: Context) {
@@ -22,7 +41,9 @@ object Prefs {
         }
         // 开发联调地址绝不能带给朋友；升级后自动迁回公共规则源
         val url = sp?.getString("remote_url", DEFAULT_REMOTE_URL).orEmpty()
-        if (url.contains("127.0.0.1") || url.contains("localhost") || url.contains("10.0.2.2")) {
+        val stale = url.contains("127.0.0.1") || url.contains("localhost") ||
+            url.contains("10.0.2.2") || url == LEGACY_COMMUNITY_URL
+        if (stale) {
             sp?.edit()
                 ?.putString("remote_url", DEFAULT_REMOTE_URL)
                 ?.putString("remote_etag", "")

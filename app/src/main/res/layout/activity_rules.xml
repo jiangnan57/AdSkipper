@@ -8,6 +8,72 @@
     android:orientation="vertical"
     android:padding="16dp">
 
+    <!-- 规则库：显示「现在用的是第几版、多少条」，并给一个能手动拉新的按钮。
+         自动同步是每 6 小时一次、且只在打开首页时触发，用户看到「我刚加了规则，
+         手机怎么没变」时需要一个自己动手的地方。 -->
+    <LinearLayout
+        android:id="@+id/cardLib"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"
+        android:background="@color/card"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="10dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="规则库"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvLib"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:lineSpacingExtra="2dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                tools:text="v3 · 345 条规则\n11-28 更新 · 长按换地址" />
+
+            <!-- 同步结果就显示在按钮下方。放到页面底部的 hint 里，
+                 用户点完按钮往下一看什么都没有，还得滚到底才知道成没成。 -->
+            <TextView
+                android:id="@+id/tvLibMsg"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:lineSpacingExtra="2dp"
+                android:textColor="@color/text_primary"
+                android:textSize="12sp"
+                android:visibility="gone"
+                tools:text="已更新到 v4（345 条）"
+                tools:visibility="visible" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnLibSync"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:minWidth="0dp"
+            android:text="获取最新规则"
+            android:textSize="12sp"
+            app:cornerRadius="10dp" />
+    </LinearLayout>
+
     <!-- 现场学到的规则：单独一块，能看也能删 -->
     <LinearLayout
         android:layout_width="match_parent"

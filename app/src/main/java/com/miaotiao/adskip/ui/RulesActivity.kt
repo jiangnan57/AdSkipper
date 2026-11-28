@@ -10,6 +10,7 @@ import com.miaotiao.adskip.R
 import com.miaotiao.adskip.data.Prefs
 import com.miaotiao.adskip.data.TaughtRulesStore
 import com.miaotiao.adskip.engine.RuleDocument
+import com.miaotiao.adskip.net.RemoteRules
 import com.miaotiao.adskip.service.SkipAccessibilityService
 import org.json.JSONObject
 
@@ -18,7 +19,13 @@ class RulesActivity : AppCompatActivity() {
     private lateinit var etRules: EditText
     private lateinit var tvHint: TextView
     private lateinit var tvTaught: TextView
+    private lateinit var tvLib: TextView
+    private lateinit var tvLibMsg: TextView
+    private lateinit var btnLibSync: MaterialButton
     private lateinit var btnTaughtClear: MaterialButton
+
+    /** 手动同步进行中：按钮已经置灰，这里再兜一层，防止连点发出两串请求 */
+    private var syncing = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,6 +34,9 @@ class RulesActivity : AppCompatActivity() {
         etRules = findViewById(R.id.etRules)
         tvHint = findViewById(R.id.tvHint)
         tvTaught = findViewById(R.id.tvTaught)
+        tvLib = findViewById(R.id.tvLib)
+        tvLibMsg = findViewById(R.id.tvLibMsg)
+        btnLibSync = findViewById(R.id.btnLibSync)
         btnTaughtClear = findViewById(R.id.btnTaughtClear)
 
         etRules.setText(Prefs.customRules)
@@ -40,9 +50,141 @@ class RulesActivity : AppCompatActivity() {
             tvHint.text = "模板已填入，改成你自己的包名和关键词后保存"
         }
 
+        btnLibSync.setOnClickListener { manualSync() }
+        // 换库地址是极低频操作，藏成长按；但状态行里写了「长按换地址」，不用猜
+        findViewById<android.view.View>(R.id.cardLib).setOnLongClickListener {
+            showSourceDialog()
+            true
+        }
+
         tvTaught.setOnClickListener { showTaught() }
         btnTaughtClear.setOnClickListener { confirmClearTaught() }
         refreshTaught()
+        refreshLib()
+    }
+
+    // ------------------------------------------------------------------ 规则库
+
+    private fun refreshLib() {
+        val meta = RemoteRules.cachedMeta(this)
+        // 只留「版本 / 条数 / 更新日期」三样。加一行「上次拉取时间」会挤到第三行，
+        // 第三行一换行，卡片高度就跳，看一眼像界面坏了。
+        tvLib.text = when {
+            meta == null ->
+                "还没下载过，现在用的是内置规则\n长按这里可以换库地址"
+            else -> buildString {
+                if (meta.version > 0) append("v${meta.version} · ")
+                append("${meta.records} 条规则")
+                append("\n")
+                if (meta.updatedAt.isNotBlank()) append("${meta.updatedAt} 更新 · ")
+                append("长按换地址")
+            }
+        }
+    }
+
+    /**
+     * 手动获取最新规则。
+     *
+     * force = true：不走 ETag，也不让 CDN 回旧副本。
+     * 用户点这个按钮的前提就是「我刚改了库，现在要看到」，
+     * 拿一句「已是最新」把他挡回去，比同步失败还让人恼火。
+     */
+    private fun manualSync() {
+        if (syncing) return
+        val url = Prefs.remoteUrl
+        if (url.isBlank()) {
+            showSourceDialog()
+            return
+        }
+        syncing = true
+        btnLibSync.isEnabled = false
+        btnLibSync.text = "获取中…"
+        tvHint.text = ""
+        tvLibMsg.visibility = android.view.View.VISIBLE
+        tvLibMsg.text = "正在拉取…"
+        val before = RemoteRules.cachedMeta(this)?.version ?: 0
+
+        Thread {
+            val r = RemoteRules.sync(applicationContext, url, force = true)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                syncing = false
+                btnLibSync.isEnabled = true
+                btnLibSync.text = "获取最新规则"
+                refreshLib()
+                if (r.ok) {
+                    // 不 reload 的话，新规则要等下一次服务重启才生效
+                    SkipAccessibilityService.instance?.reloadRules()
+                    val after = RemoteRules.cachedMeta(this)?.version ?: 0
+                    val upgrade = if (before > 0 && after > before) "（v$before → v$after）" else ""
+                    tvLibMsg.text = r.message + upgrade
+                    tvHint.text = if (r.host.isNotBlank()) "来源：${r.host}" else ""
+                    Toast.makeText(this, "规则库已更新", Toast.LENGTH_SHORT).show()
+                } else {
+                    tvLibMsg.text = r.message
+                    tvHint.text = ""
+                }
+            }
+        }.start()
+    }
+
+    private fun showSourceDialog() {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val input = EditText(this).apply {
+            setText(Prefs.remoteUrl)
+            setHint("https://…/rules.json")
+            setPadding(pad, pad, pad, pad)
+            minLines = 3
+            gravity = android.view.Gravity.TOP
+            textSize = 12f
+        }
+        val dlg = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("规则库地址")
+            .setMessage(
+                "默认是自己的规则库，一般不用改。\n\n" +
+                    "只接受 https 地址：规则就是「在谁的界面上点哪里」，" +
+                    "明文传输等于把点击权交给同一个 WiFi 下的任何人。\n\n" +
+                    "改完会自动拉一次。"
+            )
+            .setView(input)
+            .setPositiveButton("保存并获取", null)
+            .setNeutralButton("恢复默认", null)
+            .setNegativeButton("取消", null)
+            .create()
+
+        // 默认的按钮监听会先关弹窗再执行，地址写错时人就被弹出来了，
+        // 还得重新长按一次。所以自己接管：校验不过就留在原地，把错误标在输入框上。
+        dlg.setOnShowListener {
+            dlg.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener {
+                    val v = input.text.toString().trim()
+                    if (v.isNotEmpty() && !v.startsWith("https://", ignoreCase = true)) {
+                        input.error = "必须以 https:// 开头"
+                        return@setOnClickListener
+                    }
+                    input.error = null
+                    dlg.dismiss()
+                    Prefs.remoteUrl = v
+                    Prefs.remoteEtag = ""
+                    Prefs.remoteEtagUrl = ""
+                    if (v.isBlank()) {
+                        tvLibMsg.visibility = android.view.View.VISIBLE
+                        tvLibMsg.text = "已清空地址，现在只用内置规则和你自己的规则"
+                        refreshLib()
+                    } else {
+                        manualSync()
+                    }
+                }
+            dlg.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL)
+                .setOnClickListener {
+                    dlg.dismiss()
+                    Prefs.remoteUrl = Prefs.DEFAULT_REMOTE_URL
+                    Prefs.remoteEtag = ""
+                    Prefs.remoteEtagUrl = ""
+                    manualSync()
+                }
+        }
+        dlg.show()
     }
 
     // ------------------------------------------------------------------ 学来的规则
