@@ -29,16 +29,29 @@ object RemoteRules {
     /**
      * 同一个文件的多路镜像，内容完全一样，只换传输通道。
      *
-     * jsDelivr 在国内比 raw.githubusercontent 稳得多，所以排在前面；
-     * 但 jsDelivr 对 `@main` 有大约 12 小时缓存，刚 push 完可能还是旧版——
-     * 想立刻拿到新版，raw 和 GitHub Pages 这两路是绕过 CDN 缓存的。
+     * 顺序不是随便排的，它取决于这次是「自动同步」还是「用户手动点获取」：
+     *
+     * - 自动同步（后台每 6 小时一次）用 jsDelivr 打头：国内最快，
+     *   反正晚十几个小时拿到也不影响什么。
+     * - 手动同步必须拿到**刚推上去的那一版**。jsDelivr 对 `@main` 有约 12 小时缓存，
+     *   排第一就会出现「我刚 push 完，点更新还说已是最新」——而且它每次都成功，
+     *   后面三路永远轮不到。所以手动时把不吃 CDN 缓存的 raw / Pages 放前面。
+     *
+     * 代价是手动那一下可能要等两次超时（每路 6 秒）才落到 jsDelivr，
+     * 但这本来就是低频操作，慢几秒换「拿到的一定是新版」值得。
      */
-    private val LIB_MIRRORS = listOf(
-        Prefs.DEFAULT_REMOTE_URL,
-        "https://fastly.jsdelivr.net/gh/jiangnan57/AdSkipper@main/rules_server/rules.json",
-        "https://jiangnan57.github.io/AdSkipper/rules_server/rules.json",
+    private const val MIRROR_RAW =
         "https://raw.githubusercontent.com/jiangnan57/AdSkipper/main/rules_server/rules.json"
-    )
+    private const val MIRROR_PAGES =
+        "https://jiangnan57.github.io/AdSkipper/rules_server/rules.json"
+    private const val MIRROR_CDN_FASTLY =
+        "https://fastly.jsdelivr.net/gh/jiangnan57/AdSkipper@main/rules_server/rules.json"
+
+    private fun mirrorsFor(force: Boolean): List<String> = if (force) {
+        listOf(MIRROR_RAW, MIRROR_PAGES, Prefs.DEFAULT_REMOTE_URL, MIRROR_CDN_FASTLY)
+    } else {
+        listOf(Prefs.DEFAULT_REMOTE_URL, MIRROR_CDN_FASTLY, MIRROR_PAGES, MIRROR_RAW)
+    }
 
     data class Result(
         val ok: Boolean,
@@ -102,7 +115,7 @@ object RemoteRules {
 
     /** 阻塞式同步，必须放在子线程。多个地址按顺序作为镜像，首个有效来源生效。 */
     fun sync(ctx: Context, url: String, force: Boolean = false): Result {
-        val candidates = candidates(url)
+        val candidates = candidates(url, force)
         if (candidates.isEmpty()) return Result(false, "没填规则地址")
         val invalid = candidates.firstOrNull { !isSecure(it) }
         if (invalid != null) {
@@ -155,12 +168,12 @@ object RemoteRules {
         return Result(false, msg, kept)
     }
 
-    private fun candidates(raw: String): List<String> {
+    private fun candidates(raw: String, force: Boolean): List<String> {
         val entered = raw.split('\n', ';').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (entered.isEmpty()) return emptyList()
         // 只有「用默认库」才展开镜像；用户自己填了地址就按他填的走
         return if (entered.size == 1 && entered[0] == Prefs.DEFAULT_REMOTE_URL) {
-            LIB_MIRRORS
+            mirrorsFor(force)
         } else entered
     }
 

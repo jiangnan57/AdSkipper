@@ -120,9 +120,10 @@ class RulesActivity : AppCompatActivity() {
                     SkipAccessibilityService.instance?.reloadRules()
                     val after = RemoteRules.cachedMeta(this)?.version ?: 0
                     val upgrade = if (before > 0 && after > before) "（v$before → v$after）" else ""
-                    // 走了备用线路才需要说：默认那条线不通，用户有权知道
+                    // 不是默认那条线就说出来：用户排查「为什么版本不对」时，
+                    // 第一件事就是确认这次到底从哪儿拉的
                     val alt = if (r.host.isNotBlank() && r.host != primaryHost()) {
-                        "\n走备用线路 ${r.host}"
+                        "\n线路 ${r.host}"
                     } else ""
                     tvLibMsg.text = r.message + upgrade + alt
                     tvHint.text = ""
